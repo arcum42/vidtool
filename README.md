@@ -6,7 +6,7 @@ VidTool is a command line tool for video processing. It relies on ffmpeg and ffp
 
 Everything in this script is fairly subject to change, but the following is a list of features that are currently implemented:
 
-usage: vidtool [-h] {reencode,rename,info} ...
+```usage: vidtool [-h] {reencode,rename,info} ...
 
 Tool for batch reencoding, getting video info, and renaming videos with resolution.
 
@@ -62,7 +62,7 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --batch     Batch rename all files in a directory.
+  --batch     Batch rename all files in a directory.```
 
 ## Installation
 It currently doesn't need installation, as it relies only on system dependencies. Just make sure you have ffmpeg and ffprobe installed.
