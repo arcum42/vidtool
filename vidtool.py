@@ -30,6 +30,8 @@ parser_reencode.add_argument("--custom-flags", nargs="*", help="Custom flags to 
 parser_reencode.add_argument("--batch", action="store_true", help='Batch reencode all files in a directory matching a pattern, such as "*.avi".')
 parser_reencode.add_argument("--fix-resolution", action="store_true", help="Odd numbered resolution fix. Scale to nearest even resolution.")
 parser_reencode.add_argument("--fix-errors", action="store_true", help="Attempt to fix errors. Same as --err_detect ignore_err in ffmpeg.")
+parser_reencode.add_argument("--ffmpeg-path", default = "ffmpeg", help="Path to ffmpeg binary.")
+parser_reencode.add_argument("--ffprobe-path", default = "ffprobe", help="Path to ffprobe binary.")
 int_group = parser_reencode.add_mutually_exclusive_group()
 int_group.add_argument("--force", action="store_true", help="Force overwriting existing files.")
 int_group.add_argument("--no-clobber", action="store_true", help="Don't overwriting existing files.")
@@ -38,13 +40,20 @@ int_group.add_argument("--no-clobber", action="store_true", help="Don't overwrit
 parser_rename = subparsers.add_parser('rename', help='Rename a file (or all files in the current directory) to include video resolution.')
 parser_rename.add_argument("file", nargs='?', help="Filename. Required if not using --batch.", default = "")
 parser_rename.add_argument("--batch", action="store_true", help="Batch rename all files in a directory.")
+parser_rename.add_argument("--ffmpeg-path", default = "ffmpeg", help="Path to ffmpeg binary.")
+parser_rename.add_argument("--ffprobe-path", default = "ffprobe", help="Path to ffprobe binary.")
 
 # info
 parser_info = subparsers.add_parser('info', help='Get information about a video file.')
 parser_info.add_argument("file", help="Video file to get information about.")
 parser_info.add_argument("--json", action="store_true", help="Output information in JSON format.")
+parser_info.add_argument("--ffmpeg-path", default = "ffmpeg", help="Path to ffmpeg binary.")
+parser_info.add_argument("--ffprobe-path", default = "ffprobe", help="Path to ffprobe binary.")
 
 args = global_parser.parse_args()
+
+video.ffprobe_bin = args.ffprobe_path
+video.ffmpeg_bin = args.ffmpeg_path
 
 def reencode(video_file):
     v = video.encode()
