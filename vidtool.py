@@ -2,8 +2,6 @@ import argparse
 import os
 import pathlib
 
-import modules.ffmpeg as ffmpeg
-import modules.ffprobe as ffprobe
 import modules.video as video
 
 global_parser = argparse.ArgumentParser(
@@ -52,8 +50,16 @@ parser_info.add_argument("--ffprobe-path", default = "ffprobe", help="Path to ff
 
 args = global_parser.parse_args()
 
-video.ffprobe_bin = args.ffprobe_path
-video.ffmpeg_bin = args.ffmpeg_path
+if hasattr(args,"ffprobe_path"):
+    video.ffprobe_bin = args.ffprobe_path
+else:
+    video.ffprobe_bin = "ffprobe"
+
+if hasattr(args,"ffmpeg_path"):
+    video.ffmpeg_bin = args.ffmpeg_path
+else:
+    video.ffmpeg_bin = "ffmpeg"
+
 
 def reencode(video_file):
     v = video.encode()
@@ -131,3 +137,5 @@ elif args.which == 'info':
         v.print_json()
     else:
         v.print_info()
+else:
+    global_parser.print_help()
