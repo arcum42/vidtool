@@ -99,11 +99,13 @@ def reencode(video_file):
         if args.strip_video: v.exclude_video()
         if args.strip_audio: v.exclude_audio()
 
-        if args.x265: v.encode_x265()
+        if args.x265: 
+            v.encode_x265()
         if args.vcodec:
-            if args.x265: print("Warning: ignoring --vcodec because --x265 is specified.")
-        else:
-            v.set_video_codec(args.vcodec)
+            if args.x265: 
+                print("Warning: ignoring --vcodec because --x265 is specified.")
+            else:
+                v.set_video_codec(args.vcodec)
         if args.acodec: v.set_audio_codec(args.acodec)
 
     if args.fix_resolution: v.fix_resolution()

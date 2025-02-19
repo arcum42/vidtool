@@ -17,6 +17,7 @@ def execute(cmd):
 
 class info:
     def __init__(self, file):
+        #print(f"Getting info for {file}")
         self.file = file
         self.metadata = self.get_metadata(file)
         self.format_info = self.metadata["format"]
@@ -188,7 +189,8 @@ class encode:
             cmd.extend(['-i', str(input_file)])
         cmd.extend(self.arguments)
         cmd.append(str(self.output))
-
+        
+        #print(f"Command line:{cmd}")
         print(subprocess.list2cmdline(cmd))
         execute(cmd)
 
