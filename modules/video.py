@@ -54,16 +54,17 @@ class info:
     def print_json(self):
         print(json.dumps(self.metadata, indent=4))
 
-    def print_info(self):
-        print(f'{self.format_info["filename"]} - {self.format_info["format_name"]} - {self.format_info["format_long_name"]}, Runtime = {self.runtime}')
+    def get_info_block(self):
+        info_block = ""
+        info_block += f'{self.format_info["filename"]} - {self.format_info["format_name"]} - {self.format_info["format_long_name"]}, Runtime = {self.runtime}\n'
         if self.max_width % 2 == 1 or self.max_height % 2 == 1:
-            print(f'Warning: Resolution ({self.max_width}x{self.max_height}) is not divisible by 2.')
+            info_block += f'Warning: Resolution ({self.max_width}x{self.max_height}) is not divisible by 2.\n'
 
         if len(self.video_streams) > 0:
             if len(self.video_streams) > 1:
-                print(f'{len(self.video_streams)} Video streams: {self.max_width}x{self.max_height}')
+                info_block += f'{len(self.video_streams)} Video streams: {self.max_width}x{self.max_height}\n'
             else:
-                print(f'{len(self.video_streams)} Video stream: {self.max_width}x{self.max_height}')
+                info_block += f'{len(self.video_streams)} Video stream: {self.max_width}x{self.max_height}\n'
 
             for stream in self.video_streams:
                 stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
@@ -73,41 +74,45 @@ class info:
                     stream_text += f' - {stream.get("coded_width", "N/A")} x {stream.get("coded_height", "N/A")}'
                 if stream.get("display_aspect_ratio", "N/A") != "N/A":
                     stream_text += f' - DAR: {stream.get("display_aspect_ratio", "N/A")}'
-                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}'
-                print(stream_text)
+                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+                info_block += stream_text
 
         if len(self.audio_streams) > 0:
             if len(self.audio_streams) > 1:
-                print(f'{len(self.audio_streams)} Audio streams:')
+                info_block += f'{len(self.audio_streams)} Audio streams:'
             else:
-                print(f'{len(self.audio_streams)} Audio stream:')
+                info_block += f'{len(self.audio_streams)} Audio stream:'
 
             for stream in self.audio_streams:
                 stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
                 if stream.get("channels", 0) > 0:
                     stream_text += f' - channels: {stream["channels"]}'
-                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}'
-                print(stream_text)
+                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+                info_block += stream_text
 
         if len(self.subtitle_streams) > 0:
             if len(self.subtitle_streams) > 1:
-                print(f'{len(self.subtitle_streams)} Subtitle streams:')
+                info_block += f'{len(self.subtitle_streams)} Subtitle streams:'
             else:
-                print(f'{len(self.subtitle_streams)} Subtitle stream:')
+                info_block += f'{len(self.subtitle_streams)} Subtitle stream:'
 
             for stream in self.subtitle_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-                print(stream_text)
+                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+                info_block += stream_text
 
         if len(self.data_streams) > 0:
             if len(self.data_streams) > 1:
-                print(f'{len(self.data_streams)} Data streams:')
+                info_block += f'{len(self.data_streams)} Data streams:'
             else:
-                print(f'{len(self.data_streams)} Data stream:')
+                info_block += f'{len(self.data_streams)} Data stream:'
 
             for stream in self.data_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-                print(stream_text)
+                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+                info_block += stream_text
+        return info_block
+    
+    def print_info(self):
+        print(self.get_info_block())
 
     def rename_resolution(self):
         p = pathlib.Path(self.file)
