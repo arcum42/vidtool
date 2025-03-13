@@ -7,6 +7,20 @@ import os
 ffprobe_bin = "ffprobe"
 ffmpeg_bin = "ffmpeg"
 
+VIDEO_EXTENSIONS = {
+    ".avi",
+    ".mpg",
+    ".mkv",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".wmv",
+    ".mov",
+    ".m4v",
+    ".ogv",
+    ".divx",
+}
+
 def execute(cmd):
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
         for line in p.stdout:
@@ -54,6 +68,32 @@ class info:
     def print_json(self):
         print(json.dumps(self.metadata, indent=4))
 
+    def get_video_stream_description(self, stream):
+        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
+        if stream.get("height", 0) > 0:
+            stream_text += f' - {stream.get("width", "N/A")} x {stream.get("height", "N/A")}'
+        if stream.get("coded_height", 0) > 0:
+            stream_text += f' - {stream.get("coded_width", "N/A")} x {stream.get("coded_height", "N/A")}'
+        if stream.get("display_aspect_ratio", "N/A") != "N/A":
+            stream_text += f' - DAR: {stream.get("display_aspect_ratio", "N/A")}'
+        stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+        return stream_text
+    
+    def get_audio_stream_description(self, stream):
+        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
+        if stream.get("channels", 0) > 0:
+            stream_text += f' - channels: {stream["channels"]}'
+        stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+        return stream_text
+
+    def get_subtitle_stream_description(self, stream):
+        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+        return stream_text
+
+    def get_data_stream_description(self, stream):
+        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+        return stream_text
+
     def get_info_block(self):
         info_block = ""
         info_block += f'{self.format_info["filename"]} - {self.format_info["format_name"]} - {self.format_info["format_long_name"]}, Runtime = {self.runtime}\n'
@@ -67,14 +107,7 @@ class info:
                 info_block += f'{len(self.video_streams)} Video stream: {self.max_width}x{self.max_height}\n'
 
             for stream in self.video_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-                if stream.get("height", 0) > 0:
-                    stream_text += f' - {stream.get("width", "N/A")} x {stream.get("height", "N/A")}'
-                if stream.get("coded_height", 0) > 0:
-                    stream_text += f' - {stream.get("coded_width", "N/A")} x {stream.get("coded_height", "N/A")}'
-                if stream.get("display_aspect_ratio", "N/A") != "N/A":
-                    stream_text += f' - DAR: {stream.get("display_aspect_ratio", "N/A")}'
-                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+                stream_text = self.get_video_stream_description(stream)
                 info_block += stream_text
 
         if len(self.audio_streams) > 0:
@@ -84,10 +117,7 @@ class info:
                 info_block += f'{len(self.audio_streams)} Audio stream:'
 
             for stream in self.audio_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-                if stream.get("channels", 0) > 0:
-                    stream_text += f' - channels: {stream["channels"]}'
-                stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
+                stream_text = self.get_audio_stream_description(stream)
                 info_block += stream_text
 
         if len(self.subtitle_streams) > 0:
@@ -97,7 +127,7 @@ class info:
                 info_block += f'{len(self.subtitle_streams)} Subtitle stream:'
 
             for stream in self.subtitle_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+                stream_text = self.get_subtitle_stream_description(stream)
                 info_block += stream_text
 
         if len(self.data_streams) > 0:
@@ -107,7 +137,7 @@ class info:
                 info_block += f'{len(self.data_streams)} Data stream:'
 
             for stream in self.data_streams:
-                stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
+                stream_text = self.get_data_stream_description(stream)
                 info_block += stream_text
         return info_block
     
@@ -128,6 +158,14 @@ class encode:
         self.file_info = []
         self.output = ""
         self.arguments = []
+
+    def parsable_output(self):
+        self.arguments.append('-hide_banner')
+        self.arguments.append('-loglevel')
+        self.arguments.append('error')
+        self.arguments.append('-stats')
+        self.arguments.append('-progress')
+        self.arguments.append('-')
 
     def add_input(self, input_file):
         self.input.append(input_file)
