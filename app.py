@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
 import wx
-import os
 import pathlib
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS
@@ -50,6 +49,9 @@ class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
         
+        self.filename_label = wx.StaticText(self, label="Filename:")
+        self.filename = wx.TextCtrl(self, style=wx.TE_READONLY)
+        
         self.resolution_label = wx.StaticText(self, label="Resolution:")
         self.resolution = wx.TextCtrl(self, style=wx.TE_READONLY)
         
@@ -68,73 +70,78 @@ class VideoInfoPanel(wx.Panel):
         self.subtitle_streams_label = wx.StaticText(self, label="Subtitle Streams:")
         self.subtitle_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
         
-        self.video_info = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
-        self.video_info.SetValue("Select a video file from the list.")
+        self.data_streams_label = wx.StaticText(self, label="Data Streams:")
+        self.data_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
         
         sizer = wx.BoxSizer(wx.VERTICAL)
         
-        row1 = wx.BoxSizer(wx.HORIZONTAL)
-        row1.Add(self.resolution_label, 0, wx.ALL, 5)
-        row1.Add(self.resolution, 1, wx.EXPAND | wx.ALL, 5)
-        row1.Add(self.runtime_label, 0, wx.ALL, 5)
-        row1.Add(self.runtime, 1, wx.EXPAND | wx.ALL, 5)
+        filename_row = wx.BoxSizer(wx.HORIZONTAL)
+        filename_row.Add(self.filename_label, 0, wx.ALL, 5)
+        filename_row.Add(self.filename, 1, wx.EXPAND | wx.ALL, 5)
         
-        row2 = wx.BoxSizer(wx.HORIZONTAL)
-        row2.Add(self.codec_label, 0, wx.ALL, 5)
-        row2.Add(self.codec, 1, wx.EXPAND | wx.ALL, 5)
+        resolution_runtime_row = wx.BoxSizer(wx.HORIZONTAL)
+        resolution_runtime_row.Add(self.resolution_label, 0, wx.ALL, 5)
+        resolution_runtime_row.Add(self.resolution, 1, wx.EXPAND | wx.ALL, 5)
+        resolution_runtime_row.Add(self.runtime_label, 0, wx.ALL, 5)
+        resolution_runtime_row.Add(self.runtime, 1, wx.EXPAND | wx.ALL, 5)
         
-        row3 = wx.BoxSizer(wx.HORIZONTAL)
-        row3.Add(self.audio_streams_label, 0, wx.ALL, 5)
-        row3.Add(self.audio_streams, 1, wx.EXPAND | wx.ALL, 5)
+        codec_row = wx.BoxSizer(wx.HORIZONTAL)
+        codec_row.Add(self.codec_label, 0, wx.ALL, 5)
+        codec_row.Add(self.codec, 1, wx.EXPAND | wx.ALL, 5)
         
-        row4 = wx.BoxSizer(wx.HORIZONTAL)
-        row4.Add(self.video_streams_label, 0, wx.ALL, 5)
-        row4.Add(self.video_streams, 1, wx.EXPAND | wx.ALL, 5)
+        audio_streams_row = wx.BoxSizer(wx.HORIZONTAL)
+        audio_streams_row.Add(self.audio_streams_label, 0, wx.ALL, 5)
+        audio_streams_row.Add(self.audio_streams, 1, wx.EXPAND | wx.ALL, 5)
         
-        row5 = wx.BoxSizer(wx.HORIZONTAL)
-        row5.Add(self.subtitle_streams_label, 0, wx.ALL, 5)
-        row5.Add(self.subtitle_streams, 1, wx.EXPAND | wx.ALL, 5)
+        video_streams_row = wx.BoxSizer(wx.HORIZONTAL)
+        video_streams_row.Add(self.video_streams_label, 0, wx.ALL, 5)
+        video_streams_row.Add(self.video_streams, 1, wx.EXPAND | wx.ALL, 5)
         
-        sizer.Add(row1, 0, wx.EXPAND)
-        sizer.Add(row2, 0, wx.EXPAND)
-        sizer.Add(row3, 0, wx.EXPAND)
-        sizer.Add(row4, 0, wx.EXPAND)
-        sizer.Add(row5, 0, wx.EXPAND)
-        sizer.Add(self.video_info, 1, wx.EXPAND | wx.ALL, 5)
+        subtitle_streams_row = wx.BoxSizer(wx.HORIZONTAL)
+        subtitle_streams_row.Add(self.subtitle_streams_label, 0, wx.ALL, 5)
+        subtitle_streams_row.Add(self.subtitle_streams, 1, wx.EXPAND | wx.ALL, 5)
+        
+        data_streams_row = wx.BoxSizer(wx.HORIZONTAL)
+        data_streams_row.Add(self.data_streams_label, 0, wx.ALL, 5)
+        data_streams_row.Add(self.data_streams, 1, wx.EXPAND | wx.ALL, 5)
+        
+        sizer.Add(filename_row, 0, wx.EXPAND)
+        sizer.Add(resolution_runtime_row, 0, wx.EXPAND)
+        sizer.Add(codec_row, 0, wx.EXPAND)
+        sizer.Add(audio_streams_row, 0, wx.EXPAND)
+        sizer.Add(video_streams_row, 0, wx.EXPAND)
+        sizer.Add(subtitle_streams_row, 0, wx.EXPAND)
+        sizer.Add(data_streams_row, 0, wx.EXPAND)
         
         self.SetSizer(sizer)
 
     def update_info(self, info):
+        self.filename.SetValue(pathlib.Path(info.filename).name)
         self.resolution.SetValue(f"{info.max_width}x{info.max_height}")
         self.runtime.SetValue(str(info.runtime))
-        self.codec.SetValue(", ".join([stream["codec_long_name"] for stream in info.video_streams]))
+        temp_codec = ""
+        temp_codec += ", ".join([stream["codec_long_name"] for stream in info.video_streams]) if info.video_streams else ""
+        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.audio_streams]) if info.audio_streams else ""
+        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.subtitle_streams]) if info.subtitle_streams else ""
+        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.data_streams]) if info.data_streams else ""
+        self.codec.SetValue(temp_codec.strip())
         
-        audio_stream_text = ""
-        for stream in info.audio_streams:
-            audio_stream_text += f"{info.get_audio_stream_description(stream)} \n"
+        audio_stream_text = "\n".join([info.get_audio_stream_description(stream) for stream in info.audio_streams])
         self.audio_streams.SetValue(audio_stream_text.strip())
         
-        video_stream_text = ""
-        for stream in info.video_streams:
-            video_stream_text = f"{info.get_video_stream_description(stream)} \n"
+        video_stream_text = "\n".join([info.get_video_stream_description(stream) for stream in info.video_streams])
         self.video_streams.SetValue(video_stream_text.strip())
         
-        subtitle_stream_text = ""
-        for stream in info.subtitle_streams:
-            subtitle_stream_text = f"{info.get_subtitle_stream_description(stream)} \n"
+        subtitle_stream_text = "\n".join([info.get_subtitle_stream_description(stream) for stream in info.subtitle_streams])
         self.subtitle_streams.SetValue(subtitle_stream_text.strip())
-        self.video_info.SetValue(info.get_info_block())
-
 
 class MyFrame(wx.Frame):
     def __init__(self):
         super().__init__(parent=None, title="Vid Tool")
 
-        # Create a panel and sizers
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Create a notebook
         notebook = wx.Notebook(panel)
         main_panel = wx.Panel(notebook)
         log_panel = wx.Panel(notebook)
@@ -142,13 +149,12 @@ class MyFrame(wx.Frame):
         notebook.AddPage(main_panel, "Main")
         notebook.AddPage(log_panel, "Log")
 
-        # Main panel content
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         top = wx.BoxSizer(wx.HORIZONTAL)
         middle = wx.BoxSizer(wx.HORIZONTAL)
+        bottom = wx.BoxSizer(wx.VERTICAL)
         top.SetMinSize((800, 50))
 
-        # On the top, create a button to open a file dialog
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
         top.Add(self.label, 0, wx.SHAPED | wx.LEFT | wx.ALIGN_CENTER_VERTICAL, 5)
 
@@ -162,23 +168,29 @@ class MyFrame(wx.Frame):
         self.button.SetFocus()
         top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.TOP, 5)
         self.button.Bind(wx.EVT_BUTTON, self.OnChangeDir)
-        # In the middle, create a listbox with checkboxes
+
         self.listbox = wx.CheckListBox(main_panel)
         self.populateListBox()
         self.listbox.Bind(wx.EVT_LISTBOX, self.OnListBox)
 
-        # To the right of the listbox, add the VideoInfoPanel
         self.video_info_panel = VideoInfoPanel(main_panel)
 
         middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
         middle.Add(self.video_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
-
+        
+        self.reencode_pane = wx.CollapsiblePane(main_panel, wx.ID_ANY, "Reencode Options")
+        self.reencode_pane.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, lambda event: self.reencode_pane.SetLabel("Reencode Options" if self.reencode_pane.IsExpanded() else "Reencode Options"))
+        self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
+        self.reencode_pane.SetSizer(self.reencode_pane.GetSizer())
+        self.reencode_pane.SetSize((200, 100))
+        bottom.Add(self.reencode_pane, 0, wx.EXPAND | wx.ALL, 5)
+        
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
 
         main_panel.SetSizer(main_sizer)
 
-        # Log panel content
         log_sizer = wx.BoxSizer(wx.VERTICAL)
         self.text = wx.TextCtrl(log_panel, style=wx.TE_MULTILINE)
         self.text.SetValue("This is a text control.")
@@ -186,6 +198,14 @@ class MyFrame(wx.Frame):
         log_panel.SetSizer(log_sizer)
 
         sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 5)
+
+        self.file_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        self.total_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        sizer.Add(wx.StaticText(panel, label="File Progress:"), 0, wx.ALL, 5)
+        sizer.Add(self.file_progress, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(wx.StaticText(panel, label="Total Progress:"), 0, wx.ALL, 5)
+        sizer.Add(self.total_progress, 0, wx.EXPAND | wx.ALL, 5)
+
         panel.SetSizer(sizer)
 
         self.CreateStatusBar()
@@ -231,7 +251,6 @@ class MyFrame(wx.Frame):
         self.SetStatusText(f"Selected: {item}")
         info = video.info(self.working_dir / item)
         self.video_info_panel.update_info(info)
-
 
 if __name__ == "__main__":
     app = wx.App()

@@ -48,6 +48,7 @@ class info:
         self.size = int(self.format_info["size"])
         self.bitrate = int(self.format_info["bit_rate"])
         self.runtime = str(datetime.timedelta(seconds=float(self.format_info["duration"])))
+        self.filename = self.format_info["filename"]
 
     def get_metadata(self, file):
         result = subprocess.run(
