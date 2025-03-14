@@ -8,17 +8,36 @@ ffprobe_bin = "ffprobe"
 ffmpeg_bin = "ffmpeg"
 
 VIDEO_EXTENSIONS = {
-    ".avi",
-    ".mpg",
     ".mkv",
     ".mp4",
-    ".mov",
     ".webm",
+    ".ogv",
+    ".avi",
+    ".mpg",
+    ".mov",
     ".wmv",
     ".mov",
     ".m4v",
-    ".ogv",
     ".divx",
+}
+
+VIDEO_CODECS = {
+    "copy",
+    "libx264",
+    "libx265",
+    "libxvid",
+    "libvpx-vp9",
+    "nvenc_h264",
+    "nvenc_hevc"
+}
+AUDIO_CODECS = {
+    "copy",
+    "aac",
+    "ac3",
+    "dts",
+    "mp3",
+    "opus",
+    "vorbis",
 }
 
 def execute(cmd):

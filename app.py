@@ -3,7 +3,7 @@
 import wx
 import pathlib
 import modules.video as video
-from modules.video import VIDEO_EXTENSIONS
+from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
@@ -14,31 +14,36 @@ class ReencodePane(wx.CollapsiblePane):
         re_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
 
-
         self.extension_label = wx.StaticText(panel, label="Output Extension:")
         self.extension_choice = wx.Choice(panel, choices=list(VIDEO_EXTENSIONS))
         self.extension_choice.SetSelection(0)
 
-        self.video_codec_label = wx.StaticText(panel, label="Video Codec:")
-        self.video_codec = wx.TextCtrl(panel)
+        self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
+        self.vcodec_choice = wx.Choice(panel, choices=list(VIDEO_CODECS))
+        self.vcodec_choice.SetSelection(0)
 
-        self.audio_codec_label = wx.StaticText(panel, label="Audio Codec:")
-        self.audio_codec = wx.TextCtrl(panel)
+        self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
+        self.acodec_choice = wx.Choice(panel, choices=list(AUDIO_CODECS))
+        self.acodec_choice.SetSelection(0)
 
         self.include_subtitles = wx.CheckBox(panel, label="Include Subtitles")
         self.include_data_streams = wx.CheckBox(panel, label="Include Data Streams")
+        
+        self.reencode_button = wx.Button(panel, label="Reencode")
+        self.reencode_button.Bind(wx.EVT_BUTTON, self.OnReencode)
 
         re_sizer.Add(self.extension_label, 0, wx.ALL, 5)
         re_sizer.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
-        re_sizer.Add(self.video_codec_label, 0, wx.ALL, 5)
-        re_sizer.Add(self.video_codec, 0, wx.ALL | wx.EXPAND, 5)
-        re_sizer.Add(self.audio_codec_label, 0, wx.ALL, 5)
-        re_sizer.Add(self.audio_codec, 0, wx.ALL | wx.EXPAND, 5)
+        re_sizer.Add(self.vcodec_checkbox, 0, wx.ALL, 5)
+        re_sizer.Add(self.vcodec_choice, 0, wx.ALL | wx.EXPAND, 5)
+        re_sizer.Add(self.acodec_checkbox, 0, wx.ALL, 5)
+        re_sizer.Add(self.acodec_choice, 0, wx.ALL | wx.EXPAND, 5)
         re_sizer.Add(self.include_subtitles, 0, wx.ALL, 5)
         re_sizer.Add(self.include_data_streams, 0, wx.ALL, 5)
-        
+        re_sizer.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 5)
+
         panel.SetSizer(re_sizer)
-    
+
     def OnExpand(self, event):
         self.Layout()
         self.Fit()
@@ -52,63 +57,63 @@ class ReencodePane(wx.CollapsiblePane):
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
-        
+
         self.filename_label = wx.StaticText(self, label="Filename:")
         self.filename = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.resolution_label = wx.StaticText(self, label="Resolution:")
         self.resolution = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.runtime_label = wx.StaticText(self, label="Runtime:")
         self.runtime = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.codec_label = wx.StaticText(self, label="Codec:")
         self.codec = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.audio_streams_label = wx.StaticText(self, label="Audio Streams:")
         self.audio_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.video_streams_label = wx.StaticText(self, label="Video Streams:")
         self.video_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.subtitle_streams_label = wx.StaticText(self, label="Subtitle Streams:")
         self.subtitle_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         self.data_streams_label = wx.StaticText(self, label="Data Streams:")
         self.data_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
-        
+
         sizer = wx.BoxSizer(wx.VERTICAL)
-        
+
         filename_row = wx.BoxSizer(wx.HORIZONTAL)
         filename_row.Add(self.filename_label, 0, wx.ALL, 5)
         filename_row.Add(self.filename, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         resolution_runtime_row = wx.BoxSizer(wx.HORIZONTAL)
         resolution_runtime_row.Add(self.resolution_label, 0, wx.ALL, 5)
         resolution_runtime_row.Add(self.resolution, 1, wx.EXPAND | wx.ALL, 5)
         resolution_runtime_row.Add(self.runtime_label, 0, wx.ALL, 5)
         resolution_runtime_row.Add(self.runtime, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         codec_row = wx.BoxSizer(wx.HORIZONTAL)
         codec_row.Add(self.codec_label, 0, wx.ALL, 5)
         codec_row.Add(self.codec, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         audio_streams_row = wx.BoxSizer(wx.HORIZONTAL)
         audio_streams_row.Add(self.audio_streams_label, 0, wx.ALL, 5)
         audio_streams_row.Add(self.audio_streams, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         video_streams_row = wx.BoxSizer(wx.HORIZONTAL)
         video_streams_row.Add(self.video_streams_label, 0, wx.ALL, 5)
         video_streams_row.Add(self.video_streams, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         subtitle_streams_row = wx.BoxSizer(wx.HORIZONTAL)
         subtitle_streams_row.Add(self.subtitle_streams_label, 0, wx.ALL, 5)
         subtitle_streams_row.Add(self.subtitle_streams, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         data_streams_row = wx.BoxSizer(wx.HORIZONTAL)
         data_streams_row.Add(self.data_streams_label, 0, wx.ALL, 5)
         data_streams_row.Add(self.data_streams, 1, wx.EXPAND | wx.ALL, 5)
-        
+
         sizer.Add(filename_row, 0, wx.EXPAND)
         sizer.Add(resolution_runtime_row, 0, wx.EXPAND)
         sizer.Add(codec_row, 0, wx.EXPAND)
@@ -116,7 +121,7 @@ class VideoInfoPanel(wx.Panel):
         sizer.Add(video_streams_row, 0, wx.EXPAND)
         sizer.Add(subtitle_streams_row, 0, wx.EXPAND)
         sizer.Add(data_streams_row, 0, wx.EXPAND)
-        
+
         self.SetSizer(sizer)
 
     def update_info(self, info):
@@ -133,13 +138,13 @@ class VideoInfoPanel(wx.Panel):
         if info.data_streams:
             codec_list.append(", ".join([stream["codec_long_name"] for stream in info.data_streams]))
         self.codec.SetValue(" / ".join(codec_list))
-        
+
         audio_stream_text = "\n".join([info.get_audio_stream_description(stream) for stream in info.audio_streams])
         self.audio_streams.SetValue(audio_stream_text.strip())
-        
+
         video_stream_text = "\n".join([info.get_video_stream_description(stream) for stream in info.video_streams])
         self.video_streams.SetValue(video_stream_text.strip())
-        
+
         subtitle_stream_text = "\n".join([info.get_subtitle_stream_description(stream) for stream in info.subtitle_streams])
         self.subtitle_streams.SetValue(subtitle_stream_text.strip())
 
