@@ -5,10 +5,11 @@ import pathlib
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 
+global video_list
+
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
-        self.parent = parent
         
         panel = self.GetPane()
         re_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -52,6 +53,7 @@ class ReencodePane(wx.CollapsiblePane):
         parent.Fit()
 
     def OnReencode(self, event):
+        print("Video List:", video_list)
         print("Reencode button clicked")
         
 class VideoInfoPanel(wx.Panel):
@@ -185,6 +187,7 @@ class MyFrame(wx.Frame):
         self.listbox = wx.CheckListBox(main_panel)
         self.populateListBox()
         self.listbox.Bind(wx.EVT_LISTBOX, self.OnListBox)
+        self.listbox.Bind(wx.EVT_CHECKLISTBOX, self.OnListBoxCheck)
 
         self.video_info_panel = VideoInfoPanel(main_panel)
 
@@ -212,9 +215,11 @@ class MyFrame(wx.Frame):
 
         self.file_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
         self.total_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        
         sizer.Add(wx.StaticText(panel, label="File Progress:"), 0, wx.ALL, 5)
-        sizer.Add(self.file_progress, 0, wx.EXPAND | wx.ALL, 5)
         sizer.Add(wx.StaticText(panel, label="Total Progress:"), 0, wx.ALL, 5)
+        
+        sizer.Add(self.file_progress, 0, wx.EXPAND | wx.ALL, 5)
         sizer.Add(self.total_progress, 0, wx.EXPAND | wx.ALL, 5)
 
         panel.SetSizer(sizer)
@@ -244,6 +249,8 @@ class MyFrame(wx.Frame):
         dlg.Destroy()
 
     def populateListBox(self):
+        global video_list
+        video_list = []
         self.listbox.Clear()
         files = (
             p.resolve()
@@ -257,11 +264,18 @@ class MyFrame(wx.Frame):
         self.Destroy()
 
     def OnListBox(self, event):
+        global video_list
         selection = event.GetSelection()
         item = self.listbox.GetString(selection)
         self.SetStatusText(f"Selected: {item}")
         info = video.info(self.working_dir / item)
         self.video_info_panel.update_info(info)
+    
+    def OnListBoxCheck(self, event):
+        global video_list
+        video_list = []
+        for file in self.listbox.GetCheckedStrings():
+            video_list.append(str(self.working_dir / file))
 
 if __name__ == "__main__":
     app = wx.App()
