@@ -5,45 +5,56 @@ import pathlib
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS
 
-class ReencodeOptions(wx.Dialog):
+# class ReencodeOptions(wx.Dialog):
+#     def __init__(self, parent):
+#         super().__init__(parent, title="Reencode Options", size=(400, 300))
+
+#         panel = wx.Panel(self)
+#         sizer = wx.BoxSizer(wx.VERTICAL)
+
+#         self.extension_label = wx.StaticText(panel, label="Output Extension:")
+#         self.extension_choice = wx.Choice(panel, choices=VIDEO_EXTENSIONS)
+#         self.extension_choice.SetSelection(0)
+
+#         self.video_codec_label = wx.StaticText(panel, label="Video Codec:")
+#         self.video_codec = wx.TextCtrl(panel)
+
+#         self.audio_codec_label = wx.StaticText(panel, label="Audio Codec:")
+#         self.audio_codec = wx.TextCtrl(panel)
+
+#         self.include_subtitles = wx.CheckBox(panel, label="Include Subtitles")
+#         self.include_data_streams = wx.CheckBox(panel, label="Include Data Streams")
+
+#         sizer.Add(self.extension_label, 0, wx.ALL, 5)
+#         sizer.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
+#         sizer.Add(self.video_codec_label, 0, wx.ALL, 5)
+#         sizer.Add(self.video_codec, 0, wx.ALL | wx.EXPAND, 5)
+#         sizer.Add(self.audio_codec_label, 0, wx.ALL, 5)
+#         sizer.Add(self.audio_codec, 0, wx.ALL | wx.EXPAND, 5)
+#         sizer.Add(self.include_subtitles, 0, wx.ALL, 5)
+#         sizer.Add(self.include_data_streams, 0, wx.ALL, 5)
+
+#         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+#         ok_button = wx.Button(panel, wx.ID_OK, label="OK")
+#         cancel_button = wx.Button(panel, wx.ID_CANCEL, label="Cancel")
+#         button_sizer.Add(ok_button, 0, wx.ALL, 5)
+#         button_sizer.Add(cancel_button, 0, wx.ALL, 5)
+
+#         sizer.Add(button_sizer, 0, wx.ALIGN_CENTER)
+
+#         panel.SetSizer(sizer)
+#         self.Fit()
+
+class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
-        super().__init__(parent, title="Reencode Options", size=(400, 300))
+        super().__init__(parent, label="Reencode Options")
+        self.SetSizer(wx.BoxSizer(wx.VERTICAL))
+        #self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
 
-        panel = wx.Panel(self)
-        sizer = wx.BoxSizer(wx.VERTICAL)
-
-        self.extension_label = wx.StaticText(panel, label="Output Extension:")
-        self.extension_choice = wx.Choice(panel, choices=VIDEO_EXTENSIONS)
-        self.extension_choice.SetSelection(0)
-
-        self.video_codec_label = wx.StaticText(panel, label="Video Codec:")
-        self.video_codec = wx.TextCtrl(panel)
-
-        self.audio_codec_label = wx.StaticText(panel, label="Audio Codec:")
-        self.audio_codec = wx.TextCtrl(panel)
-
-        self.include_subtitles = wx.CheckBox(panel, label="Include Subtitles")
-        self.include_data_streams = wx.CheckBox(panel, label="Include Data Streams")
-
-        sizer.Add(self.extension_label, 0, wx.ALL, 5)
-        sizer.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
-        sizer.Add(self.video_codec_label, 0, wx.ALL, 5)
-        sizer.Add(self.video_codec, 0, wx.ALL | wx.EXPAND, 5)
-        sizer.Add(self.audio_codec_label, 0, wx.ALL, 5)
-        sizer.Add(self.audio_codec, 0, wx.ALL | wx.EXPAND, 5)
-        sizer.Add(self.include_subtitles, 0, wx.ALL, 5)
-        sizer.Add(self.include_data_streams, 0, wx.ALL, 5)
-
-        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        ok_button = wx.Button(panel, wx.ID_OK, label="OK")
-        cancel_button = wx.Button(panel, wx.ID_CANCEL, label="Cancel")
-        button_sizer.Add(ok_button, 0, wx.ALL, 5)
-        button_sizer.Add(cancel_button, 0, wx.ALL, 5)
-
-        sizer.Add(button_sizer, 0, wx.ALIGN_CENTER)
-
-        panel.SetSizer(sizer)
-        self.Fit()
+        self.reencode_button = wx.Button(self, label="Reencode")
+        #self.reencode_button.Bind(wx.EVT_BUTTON, self.OnReencode)
+        self.GetSizer().Add(self.reencode_button, 0, wx.ALL | wx.ALIGN_CENTER, 5)
+        self.reencode_button.Disable()
 
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
@@ -119,12 +130,16 @@ class VideoInfoPanel(wx.Panel):
         self.filename.SetValue(pathlib.Path(info.filename).name)
         self.resolution.SetValue(f"{info.max_width}x{info.max_height}")
         self.runtime.SetValue(str(info.runtime))
-        temp_codec = ""
-        temp_codec += ", ".join([stream["codec_long_name"] for stream in info.video_streams]) if info.video_streams else ""
-        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.audio_streams]) if info.audio_streams else ""
-        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.subtitle_streams]) if info.subtitle_streams else ""
-        temp_codec += " / " + ", ".join([stream["codec_long_name"] for stream in info.data_streams]) if info.data_streams else ""
-        self.codec.SetValue(temp_codec.strip())
+        codec_list = []
+        if info.video_streams:
+            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.video_streams]))
+        if info.audio_streams:
+            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.audio_streams]))
+        if info.subtitle_streams:
+            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.subtitle_streams]))
+        if info.data_streams:
+            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.data_streams]))
+        self.codec.SetValue(" / ".join(codec_list))
         
         audio_stream_text = "\n".join([info.get_audio_stream_description(stream) for stream in info.audio_streams])
         self.audio_streams.SetValue(audio_stream_text.strip())
@@ -178,10 +193,8 @@ class MyFrame(wx.Frame):
         middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
         middle.Add(self.video_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
         
-        self.reencode_pane = wx.CollapsiblePane(main_panel, wx.ID_ANY, "Reencode Options")
-        self.reencode_pane.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, lambda event: self.reencode_pane.SetLabel("Reencode Options" if self.reencode_pane.IsExpanded() else "Reencode Options"))
+        self.reencode_pane = ReencodePane(main_panel)
         self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
-        self.reencode_pane.SetSizer(self.reencode_pane.GetSizer())
         self.reencode_pane.SetSize((200, 100))
         bottom.Add(self.reencode_pane, 0, wx.EXPAND | wx.ALL, 5)
         
