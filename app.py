@@ -112,15 +112,13 @@ class ReencodePane(wx.CollapsiblePane):
                       no_subs, no_data, fix_resolution, fix_err,
                       use_crf, crf_value
                       ):
-        
+
         progress = 0
         num_videos = len(video_list)
         self.total_progress.SetRange(num_videos)
         self.total_progress.SetValue(0)
 
-        print("4 potato.")
         for video_file in video_list:
-            print("1 loop potato.")
             if not video_file: continue
 
             print(f"Encoding video_file: {video_file}")
@@ -129,11 +127,9 @@ class ReencodePane(wx.CollapsiblePane):
             #self.GetPane().Update()
             #self.GetPane().Refresh()
             #wx.Yield()
-            print("2 loop potato.")
 
             try:
                 encode_job = video.encode()
-                print("3 loop potato.")
 
                 encode_job.add_input(video_file)
                 encode_job.add_output_from_input(file_append = output_suffix, file_extension = output_extension)
@@ -150,21 +146,11 @@ class ReencodePane(wx.CollapsiblePane):
                 t.daemon = True
                 t.start()
                 t.join()
-                print("4 loop potato.")
 
                 time.sleep(1)
                 del encode_job
-                print("5 loop potato.")
             except:
                 print("What-Ho? There was some sort of issue, I'm afraid...")
-                #wx.Yield()
-                print("exception loop potato.")
-            print("6 loop potato.")
-
-        print("Reencode complete.")
-        print("5 potato.")
-        #wx.Yield()
-        print("end potato.")
         
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
@@ -291,8 +277,7 @@ class MyFrame(wx.Frame):
         middle = wx.BoxSizer(wx.HORIZONTAL)
         play_size = wx.BoxSizer(wx.HORIZONTAL)
         bottom = wx.BoxSizer(wx.VERTICAL)
-        #top.SetMinSize((800, 50))
-
+        
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
 
         self.working_dir_box = wx.TextCtrl(main_panel)
@@ -307,10 +292,6 @@ class MyFrame(wx.Frame):
         top.Add(self.label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         top.Add(self.working_dir_box, 1, wx.CENTRE | wx.ALL | wx.EXPAND, 0)
         top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
-
-        # top.Add(self.label, 0, wx.SHAPED | wx.LEFT | wx.ALIGN_CENTER_VERTICAL, 5)
-        # top.Add(self.working_dir_box, 1, wx.ALL | wx.EXPAND | wx.TOP, 0)
-        # top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.TOP, 5)
 
         self.listbox = wx.CheckListBox(main_panel)
         self.populateListBox()
