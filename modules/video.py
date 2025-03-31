@@ -6,8 +6,9 @@ import os
 
 ffprobe_bin = "ffprobe"
 ffmpeg_bin = "ffmpeg"
+ffplay_bin = "ffplay"
 
-VIDEO_EXTENSIONS = {
+VIDEO_EXTENSIONS = [
     ".mkv",
     ".mp4",
     ".webm",
@@ -19,9 +20,9 @@ VIDEO_EXTENSIONS = {
     ".mov",
     ".m4v",
     ".divx",
-}
+]
 
-VIDEO_CODECS = {
+VIDEO_CODECS = [
     "copy",
     "libx264",
     "libx265",
@@ -29,8 +30,8 @@ VIDEO_CODECS = {
     "libvpx-vp9",
     "nvenc_h264",
     "nvenc_hevc"
-}
-AUDIO_CODECS = {
+]
+AUDIO_CODECS = [
     "copy",
     "aac",
     "ac3",
@@ -38,15 +39,19 @@ AUDIO_CODECS = {
     "mp3",
     "opus",
     "vorbis",
-}
+]
 
 def execute(cmd):
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
         for line in p.stdout:
             print(line, end='')  # process line here
 
-    if p.returncode != 0:
-        raise subprocess.CalledProcessError(p.returncode, p.args)
+    #if p.returncode != 0:
+    #    raise subprocess.CalledProcessError(p.returncode, p.args)
+
+def play(video):
+    cmd = [ffplay_bin, str(video)]
+    execute(cmd)
 
 class info:
     def __init__(self, file):
@@ -65,6 +70,9 @@ class info:
 
         self.duration = float(self.format_info["duration"])
         self.size = int(self.format_info["size"])
+        self.size_kb = self.size/1024
+        self.size_mb = self.size_kb/1024
+        self.size_gb = self.size_mb/1024
         self.bitrate = int(self.format_info["bit_rate"])
         self.runtime = str(datetime.timedelta(seconds=float(self.format_info["duration"])))
         self.filename = self.format_info["filename"]
