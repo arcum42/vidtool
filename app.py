@@ -20,11 +20,11 @@ class ReencodePane(wx.CollapsiblePane):
         self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
 
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
-        self.vcodec_choice = wx.Choice(panel, choices=list(VIDEO_CODECS))
+        self.vcodec_choice = wx.ComboBox(panel, choices=list(VIDEO_CODECS))
         self.vcodec_choice.SetSelection(VIDEO_CODECS.index("libx265"))
 
         self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
-        self.acodec_choice = wx.Choice(panel, choices=list(AUDIO_CODECS))
+        self.acodec_choice = wx.ComboBox(panel, choices=list(AUDIO_CODECS))
         self.acodec_choice.SetSelection(0)
 
         self.suffix_label = wx.StaticText(panel, label="Suffix:")
