@@ -42,6 +42,9 @@ AUDIO_CODECS = [
 ]
 
 def execute(cmd):
+    #print(f"Command line:{cmd}")
+    print(subprocess.list2cmdline(cmd))
+
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
         for line in p.stdout:
             print(line, end='')  # process line here
@@ -187,11 +190,13 @@ class encode:
         self.output = ""
         self.arguments = []
 
-    def parsable_output(self):
+    def less_noise(self):
         self.arguments.append('-hide_banner')
+
+    def parsable_output(self):
+        self.arguments.append('-stats')
         self.arguments.append('-loglevel')
         self.arguments.append('error')
-        self.arguments.append('-stats')
         self.arguments.append('-progress')
         self.arguments.append('-')
 
@@ -254,15 +259,24 @@ class encode:
     def custom_flags(self, flags):
         self.arguments.extend(' '.join(flags).split())
 
-    def reencode(self):
+    def reencode_str(self):
         cmd = [ffmpeg_bin]
+        self.less_noise()
+        #self.parsable_output()
         for input_file in self.input:
             cmd.extend(['-i', str(input_file)])
         cmd.extend(self.arguments)
         cmd.append(str(self.output))
-        
-        #print(f"Command line:{cmd}")
-        print(subprocess.list2cmdline(cmd))
+        return cmd
+
+    def reencode(self):
+        cmd = [ffmpeg_bin]
+        self.less_noise()
+        #self.parsable_output()
+        for input_file in self.input:
+            cmd.extend(['-i', str(input_file)])
+        cmd.extend(self.arguments)
+        cmd.append(str(self.output))
         execute(cmd)
 
 def batch_rename(the_path):

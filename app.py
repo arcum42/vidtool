@@ -6,9 +6,9 @@ import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 import threading
 import time
-
+import subprocess
+    
 global video_list, selected_video
-
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
@@ -105,35 +105,36 @@ class ReencodePane(wx.CollapsiblePane):
         
         wx.CallAfter(self.ReEncodeAfter, output_extension, output_suffix, encode_video, video_codec, encode_audio, audio_codec, no_subs, no_data, fix_resolution, fix_err, use_crf, crf_value)
 
-    def ReEncodeAfter(self, 
-                      output_extension, output_suffix, 
-                      encode_video, video_codec, 
-                      encode_audio, audio_codec, 
-                      no_subs, no_data, fix_resolution, fix_err,
-                      use_crf, crf_value
-                      ):
+    def ReEncodeAfter( 
+                    self,
+                    output_extension, output_suffix, 
+                    encode_video, video_codec, 
+                    encode_audio, audio_codec, 
+                    no_subs, no_data, fix_resolution, fix_err,
+                    use_crf, crf_value
+                    ):
+        
+        def do_execute(cmd):
+            print(subprocess.list2cmdline(cmd))
+
+            with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
+                for line in p.stdout:
+                    print(line, end='')
+                    wx.Yield()
 
         progress = 0
-        num_videos = len(video_list)
-        self.total_progress.SetRange(num_videos)
-        self.total_progress.SetValue(0)
 
+        vid_jobs = []
         for video_file in video_list:
             if not video_file: continue
 
             print(f"Encoding video_file: {video_file}")
             progress += 1
-            #self.total_progress.SetValue(progress)
-            #self.GetPane().Update()
-            #self.GetPane().Refresh()
-            #wx.Yield()
 
             try:
                 encode_job = video.encode()
-
                 encode_job.add_input(video_file)
                 encode_job.add_output_from_input(file_append = output_suffix, file_extension = output_extension)
-
                 if (encode_video): encode_job.set_video_codec(video_codec)
                 if (encode_audio): encode_job.set_audio_codec(audio_codec)
                 if (no_subs): encode_job.exclude_subtitles()
@@ -141,17 +142,16 @@ class ReencodePane(wx.CollapsiblePane):
                 if (fix_resolution): encode_job.fix_resolution()
                 if (fix_err): encode_job.fix_errors()
                 if (use_crf): encode_job.set_crf(crf_value)
-
-                t = threading.Thread(name = 'encode', target = encode_job.reencode())
-                t.daemon = True
-                t.start()
-                t.join()
-
-                time.sleep(1)
-                del encode_job
+                if (pathlib.Path(encode_job.output).exists()):
+                    print(f"Output file '{encode_job.output}' already exists. Skipping.")
+                    continue
+                
+                vid_jobs.append(threading.Thread(name = f"encode_{progress}", target=do_execute(encode_job.reencode_str()), daemon = True))
             except:
                 print("What-Ho? There was some sort of issue, I'm afraid...")
-        
+            
+        for job in vid_jobs:
+            job.start()
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent, style = wx.RAISED_BORDER)
@@ -284,14 +284,22 @@ class MyFrame(wx.Frame):
         self.working_dir = pathlib.Path.cwd()
         self.working_dir_box.SetValue(str(self.working_dir))
 
-        self.button = wx.Button(main_panel, label="Browse")
+        self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
         self.button.SetDefault()
         self.button.SetFocus()
         self.button.Bind(wx.EVT_BUTTON, self.OnChangeDir)
 
+        self.refresh_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_REDO, wx.ART_BUTTON))
+        self.refresh_button.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        
+        self.up_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_GO_TO_PARENT, wx.ART_BUTTON))
+        self.up_button.Bind(wx.EVT_BUTTON, self.OnGoUp)
+
         top.Add(self.label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         top.Add(self.working_dir_box, 1, wx.CENTRE | wx.ALL | wx.EXPAND, 0)
         top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
 
         self.listbox = wx.CheckListBox(main_panel)
         self.populateListBox()
@@ -355,6 +363,16 @@ class MyFrame(wx.Frame):
             self.SetStatusText(f"Working directory: {str(self.working_dir)}")
             self.populateListBox()
         dlg.Destroy()
+
+    def OnRefresh(self, event):
+        self.populateListBox()
+        self.SetStatusText("File list refreshed.")
+
+    def OnGoUp(self, event):
+        self.working_dir = self.working_dir.parent
+        self.working_dir_box.SetValue(str(self.working_dir))
+        self.SetStatusText(f"Working directory: {str(self.working_dir)}")
+        self.populateListBox()
 
     def populateListBox(self):
         global video_list
