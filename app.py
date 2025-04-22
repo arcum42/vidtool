@@ -25,12 +25,12 @@ class ReencodePane(wx.CollapsiblePane):
 
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
         self.vcodec_checkbox.SetValue(config.get("encode_video", False))
-        self.vcodec_choice = wx.ComboBox(panel, choices=list(VIDEO_CODECS))
+        self.vcodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_CODECS))
         self.vcodec_choice.SetSelection(VIDEO_CODECS.index(config.get("video_codec", "libx265")))
 
         self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
         self.acodec_checkbox.SetValue(config.get("encode_audio", False))
-        self.acodec_choice = wx.ComboBox(panel, choices=list(AUDIO_CODECS))
+        self.acodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(AUDIO_CODECS))
         self.acodec_choice.SetSelection(AUDIO_CODECS.index(config.get("audio_codec", "aac")))
 
         self.suffix_label = wx.StaticText(panel, label="Suffix:")
@@ -38,7 +38,7 @@ class ReencodePane(wx.CollapsiblePane):
         self.suffix_textbox.SetValue(config.get("output_suffix", "_copy"))
         
         self.extension_label = wx.StaticText(panel, label="Extension:")
-        self.extension_choice = wx.ComboBox(panel, choices=list(VIDEO_EXTENSIONS))
+        self.extension_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_EXTENSIONS))
         self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(config.get("output_extension", ".mkv")))
 
         self.exclude_subtitles = wx.CheckBox(panel, label="No Subtitles")
@@ -52,7 +52,7 @@ class ReencodePane(wx.CollapsiblePane):
 
         self.crf_checkbox = wx.CheckBox(panel, label="CRF:")
         self.crf_checkbox.SetValue(config.get("use_crf", False))
-        self.crf_int = wx.SpinCtrl(panel, initial = 28, min = 4, max = 63)
+        self.crf_int = wx.SpinCtrl(panel, size = [-1, -1], initial = 28, min = 4, max = 63)
         self.crf_int.SetValue(config.get("crf_value", 28))
 
         self.reencode_button = wx.Button(panel, label="Reencode")
@@ -152,36 +152,40 @@ class ReencodePane(wx.CollapsiblePane):
             
         for job in vid_jobs:
             job.start()
+
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
-        super().__init__(parent, style = wx.RAISED_BORDER)
+        super().__init__(parent, style=wx.RAISED_BORDER)
 
-        self.filename_label = wx.StaticText(self, label="Filename:")
-        self.filename = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.scrollable_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
+        self.scrollable_panel.SetScrollRate(5, 5)
 
-        self.resolution_label = wx.StaticText(self, label="Resolution:")
-        self.resolution = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.filename_label = wx.StaticText(self.scrollable_panel, label="Filename:")
+        self.filename = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
+
+        self.resolution_label = wx.StaticText(self.scrollable_panel, label="Resolution:")
+        self.resolution = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
         
-        self.size_label = wx.StaticText(self, label="Size:")
-        self.size = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.size_label = wx.StaticText(self.scrollable_panel, label="Size:")
+        self.size = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.runtime_label = wx.StaticText(self, label="Runtime:")
-        self.runtime = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.runtime_label = wx.StaticText(self.scrollable_panel, label="Runtime:")
+        self.runtime = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.codec_label = wx.StaticText(self, label="Codec:")
-        self.codec = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.codec_label = wx.StaticText(self.scrollable_panel, label="Codec:")
+        self.codec = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.audio_streams_label = wx.StaticText(self, label="Audio Streams:")
-        self.audio_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.audio_streams_label = wx.StaticText(self.scrollable_panel, label="Audio Streams:")
+        self.audio_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.video_streams_label = wx.StaticText(self, label="Video Streams:")
-        self.video_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.video_streams_label = wx.StaticText(self.scrollable_panel, label="Video Streams:")
+        self.video_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.subtitle_streams_label = wx.StaticText(self, label="Subtitle Streams:")
-        self.subtitle_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.subtitle_streams_label = wx.StaticText(self.scrollable_panel, label="Subtitle Streams:")
+        self.subtitle_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
-        self.data_streams_label = wx.StaticText(self, label="Data Streams:")
-        self.data_streams = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.data_streams_label = wx.StaticText(self.scrollable_panel, label="Data Streams:")
+        self.data_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -225,7 +229,12 @@ class VideoInfoPanel(wx.Panel):
         sizer.Add(subtitle_streams_row, 0, wx.EXPAND)
         sizer.Add(data_streams_row, 0, wx.EXPAND)
 
-        self.SetSizer(sizer)
+        self.scrollable_panel.SetSizer(sizer)
+        sizer.Fit(self.scrollable_panel)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(self.scrollable_panel, 1, wx.EXPAND)
+        self.SetSizer(main_sizer)
 
     def update_info(self, info):
         self.filename.SetValue(pathlib.Path(info.filename).name)
@@ -313,21 +322,30 @@ class MyFrame(wx.Frame):
         middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
         middle.Add(self.video_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
 
+        self.select_all_button = wx.Button(main_panel, label="Select All")
+        self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
+
+        self.select_none_button = wx.Button(main_panel, label="Select None")
+        self.select_none_button.Bind(wx.EVT_BUTTON, self.OnSelectNone)
+
         self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
         self.play_button = wx.Button(main_panel, label="Play")
         self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
-        
+
         self.reencode_pane = ReencodePane(main_panel)
         self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
         self.reencode_pane.SetSize((200, 100))
+        self.reencode_pane.Expand()
         
+        play_size.Add(self.select_all_button, 0, wx.ALL, 5)
+        play_size.Add(self.select_none_button, 0, wx.ALL, 5)
         play_size.Add(self.play_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         play_size.Add(self.play_button, 0, wx.ALL, 5)
-        bottom.Add(self.reencode_pane, 0, wx.EXPAND | wx.ALL, 5)
+        bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
         
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
 
         main_panel.SetSizer(main_sizer)
@@ -428,6 +446,16 @@ class MyFrame(wx.Frame):
         print("Play button clicked")
         video.play(selected_video)
         event.Skip(True)
+
+    def OnSelectAll(self, event):
+        for i in range(self.listbox.GetCount()):
+            self.listbox.Check(i)
+        self.OnListBoxCheck(event)
+
+    def OnSelectNone(self, event):
+        for i in range(self.listbox.GetCount()):
+            self.listbox.Check(i, False)
+        self.OnListBoxCheck(event)
 
 class MyApp(wx.App):
     def OnInit(self):
