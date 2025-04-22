@@ -7,8 +7,11 @@ from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 import threading
 import time
 import subprocess
-    
-global video_list, selected_video
+import json
+
+global video_list, selected_video, config
+
+config = {}
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
@@ -260,6 +263,8 @@ class VideoInfoPanel(wx.Panel):
 
 class MyFrame(wx.Frame):
     def __init__(self):
+        global config
+        
         super().__init__(parent=None, title="Vid Tool")
 
         panel = wx.Panel(self)
@@ -281,7 +286,7 @@ class MyFrame(wx.Frame):
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
 
         self.working_dir_box = wx.TextCtrl(main_panel)
-        self.working_dir = pathlib.Path.cwd()
+        self.working_dir = config.get("working_dir", pathlib.Path.cwd())
         self.working_dir_box.SetValue(str(self.working_dir))
 
         self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
@@ -351,6 +356,8 @@ class MyFrame(wx.Frame):
         self.Show()
 
     def OnChangeDir(self, event):
+        global config
+        
         dlg = wx.DirDialog(
             self,
             "Choose a directory:",
@@ -362,6 +369,7 @@ class MyFrame(wx.Frame):
             self.working_dir_box.SetValue(str(self.working_dir))
             self.SetStatusText(f"Working directory: {str(self.working_dir)}")
             self.populateListBox()
+            config["working_dir"] = str(self.working_dir)
         dlg.Destroy()
 
     def OnRefresh(self, event):
@@ -412,9 +420,30 @@ class MyFrame(wx.Frame):
 
 class MyApp(wx.App):
     def OnInit(self):
+        global config
+        
+        # Load the config file from json
+        config_file = pathlib.Path(__file__).parent / "config.json"
+        if config_file.exists():
+            with open(config_file, "r") as f:
+                config = json.load(f)
+                print("Config loaded:", config)
+        else:
+            print("Config file not found. Using default settings.")
+
         frame = MyFrame()
         frame.Show(True)
         frame.Centre()
+        return True
+
+    def OnExit(self):
+        global config
+        
+        # Save the config file to json
+        config_file = pathlib.Path(__file__).parent / "config.json"
+        with open(config_file, "w") as f:
+            json.dump(config, f)
+            print("Config saved:", config)
         return True
 
 if __name__ == "__main__":
