@@ -14,6 +14,7 @@ global video_list, selected_video, config
 config = {}
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
+        global config
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
 
         panel = self.GetPane()
@@ -23,28 +24,36 @@ class ReencodePane(wx.CollapsiblePane):
         self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
 
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
+        self.vcodec_checkbox.SetValue(config.get("encode_video", False))
         self.vcodec_choice = wx.ComboBox(panel, choices=list(VIDEO_CODECS))
-        self.vcodec_choice.SetSelection(VIDEO_CODECS.index("libx265"))
+        self.vcodec_choice.SetSelection(VIDEO_CODECS.index(config.get("video_codec", "libx265")))
 
         self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
+        self.acodec_checkbox.SetValue(config.get("encode_audio", False))
         self.acodec_choice = wx.ComboBox(panel, choices=list(AUDIO_CODECS))
-        self.acodec_choice.SetSelection(0)
+        self.acodec_choice.SetSelection(AUDIO_CODECS.index(config.get("audio_codec", "aac")))
 
         self.suffix_label = wx.StaticText(panel, label="Suffix:")
         self.suffix_textbox = wx.TextCtrl(panel)
-        self.suffix_textbox.SetValue("_copy")
+        self.suffix_textbox.SetValue(config.get("output_suffix", "_copy"))
         
         self.extension_label = wx.StaticText(panel, label="Extension:")
         self.extension_choice = wx.ComboBox(panel, choices=list(VIDEO_EXTENSIONS))
-        self.extension_choice.SetSelection(VIDEO_EXTENSIONS.index(".mkv"))
+        self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(config.get("output_extension", ".mkv")))
 
         self.exclude_subtitles = wx.CheckBox(panel, label="No Subtitles")
+        self.exclude_subtitles.SetValue(config.get("no_subs", False))
         self.exclude_data_streams = wx.CheckBox(panel, label="No Data")
+        self.exclude_data_streams.SetValue(config.get("no_data", False))
         self.fix_res = wx.CheckBox(panel, label="Fix Resolution")
+        self.fix_res.SetValue(config.get("fix_resolution", False))
         self.fix_errors = wx.CheckBox(panel, label="Fix Errors")
+        self.fix_errors.SetValue(config.get("fix_err", False))
 
         self.crf_checkbox = wx.CheckBox(panel, label="CRF:")
+        self.crf_checkbox.SetValue(config.get("use_crf", False))
         self.crf_int = wx.SpinCtrl(panel, initial = 28, min = 4, max = 63)
+        self.crf_int.SetValue(config.get("crf_value", 28))
 
         self.reencode_button = wx.Button(panel, label="Reencode")
         self.reencode_button.Bind(wx.EVT_BUTTON, self.OnReencode)
@@ -88,35 +97,23 @@ class ReencodePane(wx.CollapsiblePane):
 
     def OnReencode(self, event):
         print("Reencode button clicked")
-        output_extension = self.extension_choice.GetStringSelection()
-        output_suffix = self.suffix_textbox.GetValue()
-
-        encode_video = self.vcodec_checkbox.GetValue()
-        video_codec = self.vcodec_choice.GetStringSelection()
-
-        encode_audio = self.acodec_checkbox.GetValue()
-        audio_codec = self.acodec_choice.GetStringSelection()
-
-        no_subs = self.exclude_subtitles.GetValue()
-        no_data = self.exclude_data_streams.GetValue()
+        options = {}
+        options["output_extension"] = self.extension_choice.GetStringSelection()
+        options["output_suffix"] = self.suffix_textbox.GetValue()
+        options["encode_video"] = self.vcodec_checkbox.GetValue()
+        options["video_codec"] = self.vcodec_choice.GetStringSelection()
+        options["encode_audio"] = self.acodec_checkbox.GetValue()
+        options["audio_codec"] = self.acodec_choice.GetStringSelection()
+        options["no_subs"] = self.exclude_subtitles.GetValue()
+        options["no_data"] = self.exclude_data_streams.GetValue()
+        options["fix_resolution"] = self.fix_res.GetValue()
+        options["fix_err"] = self.fix_errors.GetValue()
+        options["use_crf"] = self.crf_checkbox.GetValue()
+        options["crf_value"] = str(self.crf_int.GetValue())
         
-        fix_resolution = self.fix_res.GetValue()
-        fix_err = self.fix_errors.GetValue()
+        wx.CallAfter(self.ReEncodeAfter, options)
 
-        use_crf = self.crf_checkbox.GetValue()
-        crf_value = str(self.crf_int.GetValue())
-        
-        wx.CallAfter(self.ReEncodeAfter, output_extension, output_suffix, encode_video, video_codec, encode_audio, audio_codec, no_subs, no_data, fix_resolution, fix_err, use_crf, crf_value)
-
-    def ReEncodeAfter( 
-                    self,
-                    output_extension, output_suffix, 
-                    encode_video, video_codec, 
-                    encode_audio, audio_codec, 
-                    no_subs, no_data, fix_resolution, fix_err,
-                    use_crf, crf_value
-                    ):
-        
+    def ReEncodeAfter(self, options):
         def do_execute(cmd):
             print(subprocess.list2cmdline(cmd))
 
@@ -137,14 +134,14 @@ class ReencodePane(wx.CollapsiblePane):
             try:
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
-                encode_job.add_output_from_input(file_append = output_suffix, file_extension = output_extension)
-                if (encode_video): encode_job.set_video_codec(video_codec)
-                if (encode_audio): encode_job.set_audio_codec(audio_codec)
-                if (no_subs): encode_job.exclude_subtitles()
-                if (no_data): encode_job.exclude_data()
-                if (fix_resolution): encode_job.fix_resolution()
-                if (fix_err): encode_job.fix_errors()
-                if (use_crf): encode_job.set_crf(crf_value)
+                encode_job.add_output_from_input(file_append = options["output_suffix"], file_extension = options["output_extension"])
+                if (options["encode_video"]): encode_job.set_video_codec(options["video_codec"])
+                if (options["encode_audio"]): encode_job.set_audio_codec(options["audio_codec"])
+                if (options["no_subs"]): encode_job.exclude_subtitles()
+                if (options["no_data"]): encode_job.exclude_data()
+                if (options["fix_resolution"]): encode_job.fix_resolution()
+                if (options["fix_err"]): encode_job.fix_errors()
+                if (options["use_crf"]): encode_job.set_crf(options["crf_value"])
                 if (pathlib.Path(encode_job.output).exists()):
                     print(f"Output file '{encode_job.output}' already exists. Skipping.")
                     continue
@@ -286,7 +283,7 @@ class MyFrame(wx.Frame):
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
 
         self.working_dir_box = wx.TextCtrl(main_panel)
-        self.working_dir = config.get("working_dir", pathlib.Path.cwd())
+        self.working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
         self.working_dir_box.SetValue(str(self.working_dir))
 
         self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
@@ -396,6 +393,20 @@ class MyFrame(wx.Frame):
             self.listbox.Append(str(video.relative_to(self.working_dir)))
 
     def OnClose(self, event):
+        global config
+        config["output_extension"] = self.reencode_pane.extension_choice.GetStringSelection()
+        config["output_suffix"] = self.reencode_pane.suffix_textbox.GetValue()
+        config["encode_video"] = self.reencode_pane.vcodec_checkbox.GetValue()
+        config["video_codec"] = self.reencode_pane.vcodec_choice.GetStringSelection()
+        config["encode_audio"] = self.reencode_pane.acodec_checkbox.GetValue()
+        config["audio_codec"] = self.reencode_pane.acodec_choice.GetStringSelection()
+        config["no_subs"] = self.reencode_pane.exclude_subtitles.GetValue()
+        config["no_data"] = self.reencode_pane.exclude_data_streams.GetValue()
+        config["fix_resolution"] = self.reencode_pane.fix_res.GetValue()
+        config["fix_err"] = self.reencode_pane.fix_errors.GetValue()
+        config["use_crf"] = self.reencode_pane.crf_checkbox.GetValue()
+        config["crf_value"] = str(self.reencode_pane.crf_int.GetValue())
+        config["working_dir"] = str(self.working_dir)
         self.Destroy()
 
     def OnListBox(self, event):
