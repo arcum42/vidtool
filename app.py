@@ -5,17 +5,18 @@ import pathlib
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 import threading
-import time
 import subprocess
 import json
 
-global video_list, selected_video, config, main_frame
+global video_list, selected_video, config, main_frame, vid_info_panel, reencode_pane
 
 video_list = []
 config = {}
 
 selected_video = None
 main_frame = None
+vid_info_panel = None
+reencode_pane = None
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         global config
@@ -97,8 +98,6 @@ class ReencodePane(wx.CollapsiblePane):
         re_hsizer2.Add(self.append_res_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 10)
         re_hsizer2.Add(self.extension_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer2.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
-
-        #re_hsizer2.AddStretchSpacer()
         
         re_hsizer2.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 10)
         
@@ -305,7 +304,7 @@ class VideoInfoPanel(wx.Panel):
 
 class MyFrame(wx.Frame):
     def __init__(self):
-        global config
+        global config, reencode_pane, vid_info_panel
         
         super().__init__(parent=None, title="Vid Tool")
 
@@ -353,10 +352,10 @@ class MyFrame(wx.Frame):
         self.listbox.Bind(wx.EVT_LISTBOX, self.OnListBox)
         self.listbox.Bind(wx.EVT_CHECKLISTBOX, self.OnListBoxCheck)
 
-        self.video_info_panel = VideoInfoPanel(main_panel)
+        vid_info_panel = VideoInfoPanel(main_panel)
 
         middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
-        middle.Add(self.video_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
+        middle.Add(vid_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
 
         self.select_all_button = wx.Button(main_panel, label="Select All")
         self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
@@ -367,17 +366,17 @@ class MyFrame(wx.Frame):
         self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
         self.play_button = wx.Button(main_panel, label="Play")
         self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
-        self.reencode_pane = ReencodePane(main_panel)
-        self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
-        self.reencode_pane.Expand()
-        self.reencode_pane.Layout()
-        self.reencode_pane.Fit()
+        reencode_pane = ReencodePane(main_panel)
+        reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
+        reencode_pane.Expand()
+        reencode_pane.Layout()
+        reencode_pane.Fit()
         
         play_size.Add(self.select_all_button, 0, wx.ALL, 5)
         play_size.Add(self.select_none_button, 0, wx.ALL, 5)
         play_size.Add(self.play_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         play_size.Add(self.play_button, 0, wx.ALL, 5)
-        bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
+        bottom.Add(reencode_pane, 0, wx.GROW | wx.ALL, 5)
         
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
@@ -448,20 +447,20 @@ class MyFrame(wx.Frame):
             self.listbox.Append(video_str)
 
     def OnClose(self, event):
-        global config
-        config["output_extension"] = self.reencode_pane.extension_choice.GetStringSelection()
-        config["output_suffix"] = self.reencode_pane.suffix_textbox.GetValue()
-        config["append_res"] = self.reencode_pane.append_res_checkbox.GetValue()
-        config["encode_video"] = self.reencode_pane.vcodec_checkbox.GetValue()
-        config["video_codec"] = self.reencode_pane.vcodec_choice.GetStringSelection()
-        config["encode_audio"] = self.reencode_pane.acodec_checkbox.GetValue()
-        config["audio_codec"] = self.reencode_pane.acodec_choice.GetStringSelection()
-        config["no_subs"] = self.reencode_pane.exclude_subtitles.GetValue()
-        config["no_data"] = self.reencode_pane.exclude_data_streams.GetValue()
-        config["fix_resolution"] = self.reencode_pane.fix_res.GetValue()
-        config["fix_err"] = self.reencode_pane.fix_errors.GetValue()
-        config["use_crf"] = self.reencode_pane.crf_checkbox.GetValue()
-        config["crf_value"] = str(self.reencode_pane.crf_int.GetValue())
+        global config, reencode_pane
+        config["output_extension"] = reencode_pane.extension_choice.GetStringSelection()
+        config["output_suffix"] = reencode_pane.suffix_textbox.GetValue()
+        config["append_res"] = reencode_pane.append_res_checkbox.GetValue()
+        config["encode_video"] = reencode_pane.vcodec_checkbox.GetValue()
+        config["video_codec"] = reencode_pane.vcodec_choice.GetStringSelection()
+        config["encode_audio"] = reencode_pane.acodec_checkbox.GetValue()
+        config["audio_codec"] = reencode_pane.acodec_choice.GetStringSelection()
+        config["no_subs"] = reencode_pane.exclude_subtitles.GetValue()
+        config["no_data"] = reencode_pane.exclude_data_streams.GetValue()
+        config["fix_resolution"] = reencode_pane.fix_res.GetValue()
+        config["fix_err"] = reencode_pane.fix_errors.GetValue()
+        config["use_crf"] = reencode_pane.crf_checkbox.GetValue()
+        config["crf_value"] = str(reencode_pane.crf_int.GetValue())
         config["working_dir"] = str(self.working_dir)
         self.Destroy()
 
@@ -472,7 +471,7 @@ class MyFrame(wx.Frame):
         self.SetStatusText(f"Selected: {item}")
         selected_video = self.working_dir / item
         info = video.info(selected_video)
-        self.video_info_panel.update_info(info)
+        vid_info_panel.update_info(info)
     
     def OnListBoxCheck(self, event):
         global video_list, selected_video
