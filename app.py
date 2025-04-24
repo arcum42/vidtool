@@ -9,9 +9,13 @@ import time
 import subprocess
 import json
 
-global video_list, selected_video, config
+global video_list, selected_video, config, main_frame
 
+video_list = []
 config = {}
+
+selected_video = None
+main_frame = None
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         global config
@@ -26,20 +30,35 @@ class ReencodePane(wx.CollapsiblePane):
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
         self.vcodec_checkbox.SetValue(config.get("encode_video", False))
         self.vcodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_CODECS))
-        self.vcodec_choice.SetSelection(VIDEO_CODECS.index(config.get("video_codec", "libx265")))
+        vcodec_default = config.get("video_codec", "libx265")
+        if vcodec_default not in VIDEO_CODECS:
+            print(f"Warning: {vcodec_default} is not a valid video codec. Using default.")
+            vcodec_default = "libx265"
+        self.vcodec_choice.SetSelection(VIDEO_CODECS.index(vcodec_default))
 
         self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
         self.acodec_checkbox.SetValue(config.get("encode_audio", False))
         self.acodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(AUDIO_CODECS))
-        self.acodec_choice.SetSelection(AUDIO_CODECS.index(config.get("audio_codec", "aac")))
+        acodec_default = config.get("audio_codec", "aac")
+        if acodec_default not in AUDIO_CODECS:
+            print(f"Warning: {acodec_default} is not a valid audio codec. Using default.")
+            acodec_default = "aac"
+        self.acodec_choice.SetSelection(AUDIO_CODECS.index(acodec_default))
 
         self.suffix_label = wx.StaticText(panel, label="Suffix:")
         self.suffix_textbox = wx.TextCtrl(panel)
         self.suffix_textbox.SetValue(config.get("output_suffix", "_copy"))
-        
+
+        self.append_res_checkbox = wx.CheckBox(panel, label="Append Resolution")
+        self.append_res_checkbox.SetValue(config.get("append_res", False))
+
         self.extension_label = wx.StaticText(panel, label="Extension:")
         self.extension_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_EXTENSIONS))
-        self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(config.get("output_extension", ".mkv")))
+        extension_default = config.get("output_extension", ".mkv")
+        if extension_default not in VIDEO_EXTENSIONS:
+            print(f"Warning: {extension_default} is not a valid video extension. Using default.")
+            extension_default = ".mkv"
+        self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(extension_default))
 
         self.exclude_subtitles = wx.CheckBox(panel, label="No Subtitles")
         self.exclude_subtitles.SetValue(config.get("no_subs", False))
@@ -66,20 +85,22 @@ class ReencodePane(wx.CollapsiblePane):
         re_hsizer1.Add(self.acodec_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer1.Add(self.acodec_choice, 0, wx.ALL | wx.EXPAND, 10)
 
-        re_hsizer1.Add(self.suffix_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer1.Add(self.suffix_textbox, 0, wx.ALL | wx.EXPAND, 10)
-        re_hsizer1.Add(self.extension_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer1.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
-
-        re_hsizer2.Add(self.exclude_subtitles, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer2.Add(self.exclude_data_streams, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer2.Add(self.fix_res, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer2.Add(self.fix_errors, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer2.Add(self.crf_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
-        re_hsizer2.Add(self.crf_int, 0, wx.ALL, 5)
-        re_hsizer2.AddStretchSpacer()
+        re_hsizer1.Add(self.crf_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.crf_int, 0, wx.ALL | wx.ALIGN_CENTER, 5)
+        re_hsizer1.Add(self.exclude_subtitles, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.exclude_data_streams, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.fix_res, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.fix_errors, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         
-        re_hsizer1.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 10)
+        re_hsizer2.Add(self.suffix_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer2.Add(self.suffix_textbox, 0, wx.ALL | wx.EXPAND, 0)
+        re_hsizer2.Add(self.append_res_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 10)
+        re_hsizer2.Add(self.extension_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer2.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
+
+        #re_hsizer2.AddStretchSpacer()
+        
+        re_hsizer2.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 10)
         
         re_vsizer.Add(re_hsizer1, 0, wx.ALL | wx.EXPAND, 0)
         re_vsizer.Add(re_hsizer2, 0, wx.ALL | wx.EXPAND, 0)
@@ -100,6 +121,7 @@ class ReencodePane(wx.CollapsiblePane):
         options = {}
         options["output_extension"] = self.extension_choice.GetStringSelection()
         options["output_suffix"] = self.suffix_textbox.GetValue()
+        options["append_res"] = self.append_res_checkbox.GetValue()
         options["encode_video"] = self.vcodec_checkbox.GetValue()
         options["video_codec"] = self.vcodec_choice.GetStringSelection()
         options["encode_audio"] = self.acodec_checkbox.GetValue()
@@ -132,6 +154,18 @@ class ReencodePane(wx.CollapsiblePane):
             progress += 1
 
             try:
+                info = video.info(video_file)
+                if options["append_res"]:
+                    res_width = info.max_width
+                    res_height = info.max_height
+                    
+                    if options["fix_resolution"]:
+                        res_width = (res_width / 2) * 2
+                        res_height = (res_height / 2) * 2
+                    options["output_suffix"] = f"{options['output_suffix']}_{res_width}x{res_height}"
+                if options["output_suffix"] and not options["output_suffix"].startswith("_"):
+                    options["output_suffix"] = f"_{options['output_suffix']}"
+
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
                 encode_job.add_output_from_input(file_append = options["output_suffix"], file_extension = options["output_extension"])
@@ -152,6 +186,8 @@ class ReencodePane(wx.CollapsiblePane):
             
         for job in vid_jobs:
             job.start()
+        
+        main_frame.populateListBox()
 
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
@@ -331,11 +367,11 @@ class MyFrame(wx.Frame):
         self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
         self.play_button = wx.Button(main_panel, label="Play")
         self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
-
         self.reencode_pane = ReencodePane(main_panel)
         self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
-        self.reencode_pane.SetSize((200, 100))
         self.reencode_pane.Expand()
+        self.reencode_pane.Layout()
+        self.reencode_pane.Fit()
         
         play_size.Add(self.select_all_button, 0, wx.ALL, 5)
         play_size.Add(self.select_none_button, 0, wx.ALL, 5)
@@ -407,13 +443,15 @@ class MyFrame(wx.Frame):
             if p.suffix in VIDEO_EXTENSIONS
         )
 
-        for video in files:
-            self.listbox.Append(str(video.relative_to(self.working_dir)))
+        for v in files:
+            video_str = str(v.relative_to(self.working_dir))
+            self.listbox.Append(video_str)
 
     def OnClose(self, event):
         global config
         config["output_extension"] = self.reencode_pane.extension_choice.GetStringSelection()
         config["output_suffix"] = self.reencode_pane.suffix_textbox.GetValue()
+        config["append_res"] = self.reencode_pane.append_res_checkbox.GetValue()
         config["encode_video"] = self.reencode_pane.vcodec_checkbox.GetValue()
         config["video_codec"] = self.reencode_pane.vcodec_choice.GetStringSelection()
         config["encode_audio"] = self.reencode_pane.acodec_checkbox.GetValue()
@@ -459,7 +497,7 @@ class MyFrame(wx.Frame):
 
 class MyApp(wx.App):
     def OnInit(self):
-        global config
+        global config, main_frame
         
         # Load the config file from json
         config_file = pathlib.Path(__file__).parent / "config.json"
@@ -470,9 +508,9 @@ class MyApp(wx.App):
         else:
             print("Config file not found. Using default settings.")
 
-        frame = MyFrame()
-        frame.Show(True)
-        frame.Centre()
+        main_frame = MyFrame()
+        main_frame.Show(True)
+        main_frame.Centre()
         return True
 
     def OnExit(self):
