@@ -135,6 +135,7 @@ class ReencodePane(wx.CollapsiblePane):
         wx.CallAfter(self.ReEncodeAfter, options)
 
     def ReEncodeAfter(self, options):
+        global main_frame
         def do_execute(cmd):
             print(subprocess.list2cmdline(cmd))
 
@@ -142,18 +143,22 @@ class ReencodePane(wx.CollapsiblePane):
                 for line in p.stdout:
                     print(line, end='')
                     wx.Yield()
+                wx.Yield()
 
+        main_frame.Disable()
         progress = 0
+        reencode_pane.total_progress.SetValue(0)
+        reencode_pane.total_progress.SetRange(len(video_list))
 
-        vid_jobs = []
         for video_file in video_list:
             if not video_file: continue
 
             print(f"Encoding video_file: {video_file}")
-            progress += 1
 
             try:
                 info = video.info(video_file)
+                output_suffix = options["output_suffix"]
+
                 if options["append_res"]:
                     res_width = info.max_width
                     res_height = info.max_height
@@ -161,13 +166,13 @@ class ReencodePane(wx.CollapsiblePane):
                     if options["fix_resolution"]:
                         res_width = (res_width / 2) * 2
                         res_height = (res_height / 2) * 2
-                    options["output_suffix"] = f"{options['output_suffix']}_{res_width}x{res_height}"
-                if options["output_suffix"] and not options["output_suffix"].startswith("_"):
-                    options["output_suffix"] = f"_{options['output_suffix']}"
+                    output_suffix = f"{output_suffix}_{res_width}x{res_height}"
+                if output_suffix and not output_suffix.startswith("_"):
+                    output_suffix = f"_{output_suffix}"
 
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
-                encode_job.add_output_from_input(file_append = options["output_suffix"], file_extension = options["output_extension"])
+                encode_job.add_output_from_input(file_append = output_suffix, file_extension = options["output_extension"])
                 if (options["encode_video"]): encode_job.set_video_codec(options["video_codec"])
                 if (options["encode_audio"]): encode_job.set_audio_codec(options["audio_codec"])
                 if (options["no_subs"]): encode_job.exclude_subtitles()
@@ -179,13 +184,14 @@ class ReencodePane(wx.CollapsiblePane):
                     print(f"Output file '{encode_job.output}' already exists. Skipping.")
                     continue
                 
-                vid_jobs.append(threading.Thread(name = f"encode_{progress}", target=do_execute(encode_job.reencode_str()), daemon = True))
+                wx.Yield()
+                do_execute(encode_job.reencode_str())
+                progress += 1
+                reencode_pane.total_progress.SetValue(progress)
             except:
                 print("What-Ho? There was some sort of issue, I'm afraid...")
-            
-        for job in vid_jobs:
-            job.start()
-        
+
+        main_frame.Enable()
         main_frame.populateListBox()
 
 class VideoInfoPanel(wx.Panel):
