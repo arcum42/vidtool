@@ -19,7 +19,11 @@ VIDEO_EXTENSIONS = [
     ".wmv",
     ".mov",
     ".m4v",
+    ".ogm",
+    ".ogv",
+    ".flv",
     ".divx",
+    ".mpeg"
 ]
 
 VIDEO_CODECS = [
@@ -34,11 +38,11 @@ VIDEO_CODECS = [
 AUDIO_CODECS = [
     "copy",
     "aac",
-    "ac3",
-    "dts",
     "mp3",
-    "opus",
-    "vorbis",
+    "flac",
+    "ogg",
+    "ac3",
+    "opus"
 ]
 
 def execute(cmd):
@@ -202,7 +206,9 @@ class encode:
 
     def add_input(self, input_file):
         self.input.append(input_file)
-        self.file_info.append(info(input_file))
+        if pathlib.Path(input_file).suffix != ".srt":
+            print(f"Adding input file: {input_file}")
+            self.file_info.append(info(input_file))
 
     def add_output(self, output_file):
         self.output = output_file

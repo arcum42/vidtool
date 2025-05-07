@@ -8,7 +8,7 @@ import threading
 import subprocess
 import json
 
-global video_list, selected_video, config, main_frame, vid_info_panel, reencode_pane
+global video_list, selected_video, config, main_frame, vid_info_panel, reencode_pane, working_dir
 
 video_list = []
 config = {}
@@ -61,8 +61,11 @@ class ReencodePane(wx.CollapsiblePane):
             extension_default = ".mkv"
         self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(extension_default))
 
-        self.exclude_subtitles = wx.CheckBox(panel, label="No Subtitles")
-        self.exclude_subtitles.SetValue(config.get("no_subs", False))
+        self.sub_label = wx.StaticText(panel, label="Subtitles:")
+        sub_list = ["None", "First", "All", "srt"]
+        self.sub_choice = wx.ComboBox(panel, size = [-1, -1], choices=sub_list)
+        self.sub_choice.SetSelection(sub_list.index(config.get("subtitles", "First")))
+        
         self.exclude_data_streams = wx.CheckBox(panel, label="No Data")
         self.exclude_data_streams.SetValue(config.get("no_data", False))
         self.fix_res = wx.CheckBox(panel, label="Fix Resolution")
@@ -88,7 +91,8 @@ class ReencodePane(wx.CollapsiblePane):
 
         re_hsizer1.Add(self.crf_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer1.Add(self.crf_int, 0, wx.ALL | wx.ALIGN_CENTER, 5)
-        re_hsizer1.Add(self.exclude_subtitles, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.sub_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
+        re_hsizer1.Add(self.sub_choice, 0, wx.ALL | wx.EXPAND, 5)
         re_hsizer1.Add(self.exclude_data_streams, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer1.Add(self.fix_res, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer1.Add(self.fix_errors, 0, wx.ALL | wx.ALIGN_CENTER, 0)
@@ -125,7 +129,7 @@ class ReencodePane(wx.CollapsiblePane):
         options["video_codec"] = self.vcodec_choice.GetStringSelection()
         options["encode_audio"] = self.acodec_checkbox.GetValue()
         options["audio_codec"] = self.acodec_choice.GetStringSelection()
-        options["no_subs"] = self.exclude_subtitles.GetValue()
+        options["subtitles"] = self.sub_choice.GetStringSelection()
         options["no_data"] = self.exclude_data_streams.GetValue()
         options["fix_resolution"] = self.fix_res.GetValue()
         options["fix_err"] = self.fix_errors.GetValue()
@@ -138,7 +142,7 @@ class ReencodePane(wx.CollapsiblePane):
         global main_frame
         def do_execute(cmd):
             print(subprocess.list2cmdline(cmd))
-
+            
             with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
                 for line in p.stdout:
                     print(line, end='')
@@ -175,7 +179,20 @@ class ReencodePane(wx.CollapsiblePane):
                 encode_job.add_output_from_input(file_append = output_suffix, file_extension = options["output_extension"])
                 if (options["encode_video"]): encode_job.set_video_codec(options["video_codec"])
                 if (options["encode_audio"]): encode_job.set_audio_codec(options["audio_codec"])
-                if (options["no_subs"]): encode_job.exclude_subtitles()
+                if (options["subtitles"] == "None"):
+                    encode_job.exclude_subtitles()
+                elif (options["subtitles"] == "All"):
+                    encode_job.copy_subtitles()
+                elif (options["subtitles"] == "srt"):
+                    print("Adding srt file")
+                    srt_file = pathlib.Path(video_file).with_suffix(".srt")
+                    print(f"Adding srt file: {srt_file}")
+                    if srt_file.exists():
+                        print(f"Exists. Adding srt file: {srt_file}")
+                        encode_job.add_input(str(srt_file))
+                    else:
+                        print(f"Warning: {srt_file} does not exist. Skipping.")
+
                 if (options["no_data"]): encode_job.exclude_data()
                 if (options["fix_resolution"]): encode_job.fix_resolution()
                 if (options["fix_err"]): encode_job.fix_errors()
@@ -192,7 +209,7 @@ class ReencodePane(wx.CollapsiblePane):
                 print("What-Ho? There was some sort of issue, I'm afraid...")
 
         main_frame.Enable()
-        main_frame.populateListBox()
+        main_frame.listbox.refresh()
 
 class VideoInfoPanel(wx.Panel):
     def __init__(self, parent):
@@ -308,9 +325,61 @@ class VideoInfoPanel(wx.Panel):
         subtitle_stream_text = "\n".join([info.get_subtitle_stream_description(stream) for stream in info.subtitle_streams])
         self.subtitle_streams.SetValue(subtitle_stream_text.strip())
 
+class VideoList(wx.ListCtrl):
+    def __init__(self, parent):
+        super().__init__(parent, style=wx.LC_REPORT | wx.SUNKEN_BORDER)
+        self.InsertColumn(0, 'Filename')
+        self.SetColumnWidth(0, 300)
+        self.InsertColumn(1, 'Video')
+        self.InsertColumn(2, 'Audio')
+        self.InsertColumn(3, 'Res')
+        self.InsertColumn(4, 'Size')
+        self.EnableCheckBoxes()
+        self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnSelected)
+        self.Bind(wx.EVT_LIST_ITEM_CHECKED, self.OnChecked)
+        self.refresh()
+
+    def OnSelected(self, event):
+        global video_list, selected_video, working_dir, main_frame
+
+        selection = self.GetFirstSelected()
+        if selection == -1:
+            main_frame.SetStatusText("No selection")
+            return
+
+        item = self.GetItemText(selection, 0)
+        main_frame.SetStatusText(f"Selected: {item}")
+        selected_video = working_dir / item
+        info = video.info(selected_video)
+        vid_info_panel.update_info(info)
+    
+    def OnChecked(self, event):
+        global video_list, working_dir
+        video_list = []
+        
+        #Iterate over all items in the listbox and add the checked items to the video_list
+        for i in range(self.GetItemCount()):
+            if self.IsItemChecked(i):
+                video_list.append(str(working_dir / self.GetItemText(i, 0)))
+
+    def refresh(self):
+        global video_list, working_dir
+        video_list = []
+        self.DeleteAllItems()
+        files = sorted(
+            p.resolve()
+            for p in pathlib.Path(working_dir).glob("**/*")
+            if p.suffix in VIDEO_EXTENSIONS
+        )
+        
+        i = 0
+        for v in files:
+            video_str = str(v.relative_to(working_dir))
+            self.InsertItem(i, video_str)
+            i += 1
 class MyFrame(wx.Frame):
     def __init__(self):
-        global config, reencode_pane, vid_info_panel
+        global config, reencode_pane, vid_info_panel, working_dir
         
         super().__init__(parent=None, title="Vid Tool")
 
@@ -332,9 +401,9 @@ class MyFrame(wx.Frame):
         
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
 
+        working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
         self.working_dir_box = wx.TextCtrl(main_panel)
-        self.working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
-        self.working_dir_box.SetValue(str(self.working_dir))
+        self.working_dir_box.SetValue(str(working_dir))
 
         self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
         self.button.SetDefault()
@@ -353,10 +422,7 @@ class MyFrame(wx.Frame):
         top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
         top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
 
-        self.listbox = wx.CheckListBox(main_panel)
-        self.populateListBox()
-        self.listbox.Bind(wx.EVT_LISTBOX, self.OnListBox)
-        self.listbox.Bind(wx.EVT_CHECKLISTBOX, self.OnListBoxCheck)
+        self.listbox = VideoList(main_panel)
 
         vid_info_panel = VideoInfoPanel(main_panel)
 
@@ -412,45 +478,27 @@ class MyFrame(wx.Frame):
         self.Show()
 
     def OnChangeDir(self, event):
-        global config
+        global config, working_dir
         
-        dlg = wx.DirDialog(
-            self,
-            "Choose a directory:",
-            str(self.working_dir),
-            wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
-        )
+        dlg = wx.DirDialog(self, "Choose a directory:", str(working_dir), wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,)
         if dlg.ShowModal() == wx.ID_OK:
-            self.working_dir = pathlib.Path(dlg.GetPath()).resolve()
-            self.working_dir_box.SetValue(str(self.working_dir))
-            self.SetStatusText(f"Working directory: {str(self.working_dir)}")
-            self.populateListBox()
-            config["working_dir"] = str(self.working_dir)
+            working_dir = pathlib.Path(dlg.GetPath()).resolve()
+            self.working_dir_box.SetValue(str(working_dir))
+            self.SetStatusText(f"Working directory: {str(working_dir)}")
+            self.listbox.refresh()
+            config["working_dir"] = str(working_dir)
         dlg.Destroy()
 
     def OnRefresh(self, event):
-        self.populateListBox()
+        self.listbox.refresh()
         self.SetStatusText("File list refreshed.")
 
     def OnGoUp(self, event):
-        self.working_dir = self.working_dir.parent
-        self.working_dir_box.SetValue(str(self.working_dir))
-        self.SetStatusText(f"Working directory: {str(self.working_dir)}")
-        self.populateListBox()
-
-    def populateListBox(self):
-        global video_list
-        video_list = []
-        self.listbox.Clear()
-        files = sorted(
-            p.resolve()
-            for p in pathlib.Path(self.working_dir).glob("**/*")
-            if p.suffix in VIDEO_EXTENSIONS
-        )
-
-        for v in files:
-            video_str = str(v.relative_to(self.working_dir))
-            self.listbox.Append(video_str)
+        global working_dir
+        working_dir = working_dir.parent
+        self.working_dir_box.SetValue(str(working_dir))
+        self.SetStatusText(f"Working directory: {str(working_dir)}")
+        self.listbox.refresh()
 
     def OnClose(self, event):
         global config, reencode_pane
@@ -461,29 +509,13 @@ class MyFrame(wx.Frame):
         config["video_codec"] = reencode_pane.vcodec_choice.GetStringSelection()
         config["encode_audio"] = reencode_pane.acodec_checkbox.GetValue()
         config["audio_codec"] = reencode_pane.acodec_choice.GetStringSelection()
-        config["no_subs"] = reencode_pane.exclude_subtitles.GetValue()
         config["no_data"] = reencode_pane.exclude_data_streams.GetValue()
         config["fix_resolution"] = reencode_pane.fix_res.GetValue()
         config["fix_err"] = reencode_pane.fix_errors.GetValue()
         config["use_crf"] = reencode_pane.crf_checkbox.GetValue()
         config["crf_value"] = str(reencode_pane.crf_int.GetValue())
-        config["working_dir"] = str(self.working_dir)
+        config["working_dir"] = str(working_dir)
         self.Destroy()
-
-    def OnListBox(self, event):
-        global video_list, selected_video
-        selection = event.GetSelection()
-        item = self.listbox.GetString(selection)
-        self.SetStatusText(f"Selected: {item}")
-        selected_video = self.working_dir / item
-        info = video.info(selected_video)
-        vid_info_panel.update_info(info)
-    
-    def OnListBoxCheck(self, event):
-        global video_list, selected_video
-        video_list = []
-        for file in self.listbox.GetCheckedStrings():
-            video_list.append(str(self.working_dir / file))
         
     def OnPlay(self, event):
         print("Play button clicked")
