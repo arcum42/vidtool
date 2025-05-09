@@ -523,14 +523,14 @@ class MyFrame(wx.Frame):
         event.Skip(True)
 
     def OnSelectAll(self, event):
-        for i in range(self.listbox.GetCount()):
-            self.listbox.Check(i)
-        self.OnListBoxCheck(event)
+        for i in range(self.listbox.GetItemCount()):
+            self.listbox.CheckItem(i)
+        self.listbox.OnChecked(event)
 
     def OnSelectNone(self, event):
-        for i in range(self.listbox.GetCount()):
-            self.listbox.Check(i, False)
-        self.OnListBoxCheck(event)
+        for i in range(self.listbox.GetItemCount()):
+            self.listbox.CheckItem(i, False)
+        self.listbox.OnChecked(event)
 
 class MyApp(wx.App):
     def OnInit(self):
