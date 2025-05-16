@@ -8,15 +8,254 @@ import threading
 import subprocess
 import json
 
-global video_list, selected_video, config, main_frame, vid_info_panel, reencode_pane, working_dir
+global video_list, selected_video, config, working_dir
 
 video_list = []
 config = {}
 
 selected_video = None
-main_frame = None
-vid_info_panel = None
-reencode_pane = None
+working_dir = None
+class VideoInfoPanel(wx.Panel):
+    LABELS = [
+        ("Filename:", "filename"),
+        ("Resolution:", "resolution"),
+        ("Size:", "size"),
+        ("Runtime:", "runtime"),
+        ("Codec:", "codec"),
+        ("Video Streams:", "video_streams"),
+        ("Audio Streams:", "audio_streams"),
+        ("Subtitle Streams:", "subtitle_streams"),
+        ("Data Streams:", "data_streams"),
+    ]
+
+    def __init__(self, parent):
+        super().__init__(parent, style=wx.RAISED_BORDER)
+        self.scrollable_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
+        self.scrollable_panel.SetScrollRate(5, 5)
+        self.fields = {}
+        sizer = wx.FlexGridSizer(cols=2, vgap=5, hgap=5)
+        for label, attr in self.LABELS:
+            lbl = wx.StaticText(self.scrollable_panel, label=label)
+            txt = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
+            self.fields[attr] = txt
+            sizer.Add(lbl, 0, wx.ALIGN_CENTER_VERTICAL)
+            sizer.Add(txt, 1, wx.EXPAND)
+        sizer.AddGrowableCol(1, 1)
+        self.scrollable_panel.SetSizer(sizer)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(self.scrollable_panel, 1, wx.EXPAND)
+        self.SetSizer(main_sizer)
+
+    def update_info(self, info):
+        self.fields["filename"].SetValue(pathlib.Path(info.filename).name)
+        self.fields["resolution"].SetValue(f"{info.max_width}x{info.max_height}")
+        size = (f"{info.size_kb:.2f} KB" if info.size_kb < 1024 else
+                f"{info.size_mb:.2f} MB" if info.size_mb < 1024 else
+                f"{info.size_gb:.2f} GB")
+        self.fields["size"].SetValue(size)
+        self.fields["runtime"].SetValue(str(info.runtime))
+        codec_list = []
+        for key in ("video_streams", "audio_streams", "subtitle_streams", "data_streams"):
+            streams = getattr(info, key)
+            if streams:
+                codec_list.append(", ".join(s["codec_long_name"] for s in streams))
+        self.fields["codec"].SetValue(" / ".join(codec_list))
+        self.fields["audio_streams"].SetValue(
+            "\n".join(info.get_audio_stream_description(s) for s in info.audio_streams).strip())
+        self.fields["video_streams"].SetValue(
+            "\n".join(info.get_video_stream_description(s) for s in info.video_streams).strip())
+        self.fields["subtitle_streams"].SetValue(
+            "\n".join(info.get_subtitle_stream_description(s) for s in info.subtitle_streams).strip())
+        self.fields["data_streams"].SetValue(
+            "\n".join(info.get_data_stream_description(s) for s in info.data_streams).strip())
+
+class VideoList(wx.ListCtrl):
+    COLS = [
+        ('Filename', 300),
+        ('Video', 100),
+        ('Audio', 100),
+        ('Res', 80),
+        ('Size', 80),
+    ]
+
+    def __init__(self, parent, main_frame=None, vid_info_panel=None):
+        super().__init__(parent, style=wx.LC_REPORT | wx.SUNKEN_BORDER)
+        self.main_frame = main_frame
+        self.vid_info_panel = vid_info_panel
+        for idx, (label, width) in enumerate(self.COLS):
+            self.InsertColumn(idx, label)
+            self.SetColumnWidth(idx, width)
+        self.EnableCheckBoxes()
+        self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnSelected)
+        self.Bind(wx.EVT_LIST_ITEM_CHECKED, self.OnChecked)
+        self.refresh()
+
+    def OnSelected(self, event):
+        global selected_video, working_dir
+        selection = self.GetFirstSelected()
+        if selection == -1:
+            if self.main_frame:
+                self.main_frame.SetStatusText("No selection")
+            return
+        item = self.GetItemText(selection, 0)
+        if self.main_frame:
+            self.main_frame.SetStatusText(f"Selected: {item}")
+        selected_video = working_dir / item
+        info = video.info(selected_video)
+        if self.vid_info_panel:
+            self.vid_info_panel.update_info(info)
+
+    def OnChecked(self, event):
+        global video_list, working_dir
+        video_list = [
+            str(working_dir / self.GetItemText(i, 0))
+            for i in range(self.GetItemCount()) if self.IsItemChecked(i)
+        ]
+
+    def refresh(self):
+        global video_list, working_dir
+        video_list = []
+        self.DeleteAllItems()
+        if not working_dir:
+            return
+        files = sorted(
+            p.resolve()
+            for p in pathlib.Path(working_dir).glob("**/*")
+            if p.suffix in VIDEO_EXTENSIONS
+        )
+        for i, v in enumerate(files):
+            self.InsertItem(i, str(v.relative_to(working_dir)))
+
+class MyFrame(wx.Frame):
+    def __init__(self):
+        global config, working_dir
+        super().__init__(parent=None, title="Vid Tool")
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        notebook = wx.Notebook(panel)
+        main_panel = wx.Panel(notebook)
+        log_panel = wx.Panel(notebook)
+        notebook.AddPage(main_panel, "Main")
+        notebook.AddPage(log_panel, "Log")
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        top = wx.BoxSizer(wx.HORIZONTAL)
+        middle = wx.BoxSizer(wx.HORIZONTAL)
+        play_size = wx.BoxSizer(wx.HORIZONTAL)
+        bottom = wx.BoxSizer(wx.VERTICAL)
+        self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
+        working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
+        self.working_dir_box = wx.TextCtrl(main_panel)
+        self.working_dir_box.SetValue(str(working_dir))
+        self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
+        self.button.SetDefault()
+        self.button.SetFocus()
+        self.button.Bind(wx.EVT_BUTTON, self.OnChangeDir)
+        self.refresh_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_REDO, wx.ART_BUTTON))
+        self.refresh_button.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        self.up_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_GO_TO_PARENT, wx.ART_BUTTON))
+        self.up_button.Bind(wx.EVT_BUTTON, self.OnGoUp)
+        top.Add(self.label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        top.Add(self.working_dir_box, 1, wx.CENTRE | wx.ALL | wx.EXPAND, 0)
+        top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        self.vid_info_panel = VideoInfoPanel(main_panel)
+        self.listbox = VideoList(main_panel, main_frame=self, vid_info_panel=self.vid_info_panel)
+        middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
+        middle.Add(self.vid_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
+        self.select_all_button = wx.Button(main_panel, label="Select All")
+        self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
+        self.select_none_button = wx.Button(main_panel, label="Select None")
+        self.select_none_button.Bind(wx.EVT_BUTTON, self.OnSelectNone)
+        self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
+        self.play_button = wx.Button(main_panel, label="Play")
+        self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
+        self.reencode_pane = ReencodePane(main_panel)
+        self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
+        self.reencode_pane.Expand()
+        self.reencode_pane.Layout()
+        self.reencode_pane.Fit()
+        play_size.Add(self.select_all_button, 0, wx.ALL, 5)
+        play_size.Add(self.select_none_button, 0, wx.ALL, 5)
+        play_size.Add(self.play_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        play_size.Add(self.play_button, 0, wx.ALL, 5)
+        bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
+        main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
+        main_panel.SetSizer(main_sizer)
+        log_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.text = wx.TextCtrl(log_panel, style=wx.TE_MULTILINE)
+        self.text.SetValue("This is a text control.")
+        log_sizer.Add(self.text, 1, wx.EXPAND | wx.ALL, 5)
+        log_panel.SetSizer(log_sizer)
+        sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 5)
+        panel.SetSizer(sizer)
+        self.CreateStatusBar()
+        self.SetStatusText("Welcome to Vid Tool!")
+        self.SetSize((1200, 600))
+        self.Center()
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+        self.Show()
+
+    def OnChangeDir(self, event):
+        global config, working_dir
+        dlg = wx.DirDialog(self, "Choose a directory:", str(working_dir), wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,)
+        if dlg.ShowModal() == wx.ID_OK:
+            working_dir = pathlib.Path(dlg.GetPath()).resolve()
+            self.working_dir_box.SetValue(str(working_dir))
+            self.SetStatusText(f"Working directory: {str(working_dir)}")
+            self.listbox.refresh()
+            config["working_dir"] = str(working_dir)
+        dlg.Destroy()
+
+    def OnRefresh(self, event):
+        self.listbox.refresh()
+        self.SetStatusText("File list refreshed.")
+
+    def OnGoUp(self, event):
+        global working_dir
+        if working_dir is not None:
+            working_dir = working_dir.parent
+            self.working_dir_box.SetValue(str(working_dir))
+            self.SetStatusText(f"Working directory: {str(working_dir)}")
+            self.listbox.refresh()
+
+    def OnClose(self, event):
+        global config, working_dir
+        # Save config from reencode_pane
+        pane = self.reencode_pane
+        config["output_extension"] = pane.extension_choice.GetStringSelection()
+        config["output_suffix"] = pane.suffix_textbox.GetValue()
+        config["append_res"] = pane.append_res_checkbox.GetValue()
+        config["encode_video"] = pane.vcodec_checkbox.GetValue()
+        config["video_codec"] = pane.vcodec_choice.GetStringSelection()
+        config["encode_audio"] = pane.acodec_checkbox.GetValue()
+        config["audio_codec"] = pane.acodec_choice.GetStringSelection()
+        config["no_data"] = pane.exclude_data_streams.GetValue()
+        config["fix_resolution"] = pane.fix_res.GetValue()
+        config["fix_err"] = pane.fix_errors.GetValue()
+        config["use_crf"] = pane.crf_checkbox.GetValue()
+        config["crf_value"] = str(pane.crf_int.GetValue())
+        config["working_dir"] = str(working_dir) if working_dir else str(pathlib.Path.cwd())
+        self.Destroy()
+
+    def OnPlay(self, event):
+        print("Play button clicked")
+        video.play(selected_video)
+        event.Skip(True)
+
+    def OnSelectAll(self, event):
+        for i in range(self.listbox.GetItemCount()):
+            self.listbox.CheckItem(i)
+        self.listbox.OnChecked(event)
+
+    def OnSelectNone(self, event):
+        for i in range(self.listbox.GetItemCount()):
+            self.listbox.CheckItem(i, False)
+        self.listbox.OnChecked(event)
+
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent):
         global config
@@ -139,41 +378,34 @@ class ReencodePane(wx.CollapsiblePane):
         wx.CallAfter(self.ReEncodeAfter, options)
 
     def ReEncodeAfter(self, options):
-        global main_frame
         def do_execute(cmd):
             print(subprocess.list2cmdline(cmd))
-            
             with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
-                for line in p.stdout:
-                    print(line, end='')
-                    wx.Yield()
+                if p.stdout:
+                    for line in p.stdout:
+                        print(line, end='')
+                        wx.Yield()
                 wx.Yield()
 
-        main_frame.Disable()
+        self.GetParent().Disable()
         progress = 0
-        reencode_pane.total_progress.SetValue(0)
-        reencode_pane.total_progress.SetRange(len(video_list))
-
+        self.total_progress.SetValue(0)
+        self.total_progress.SetRange(len(video_list))
         for video_file in video_list:
             if not video_file: continue
-
             print(f"Encoding video_file: {video_file}")
-
             try:
                 info = video.info(video_file)
                 output_suffix = options["output_suffix"]
-
                 if options["append_res"]:
                     res_width = info.max_width
                     res_height = info.max_height
-                    
                     if options["fix_resolution"]:
                         res_width = (res_width / 2) * 2
                         res_height = (res_height / 2) * 2
                     output_suffix = f"{output_suffix}_{res_width}x{res_height}"
                 if output_suffix and not output_suffix.startswith("_"):
                     output_suffix = f"_{output_suffix}"
-
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
                 encode_job.add_output_from_input(file_append = output_suffix, file_extension = options["output_extension"])
@@ -192,7 +424,6 @@ class ReencodePane(wx.CollapsiblePane):
                         encode_job.add_input(str(srt_file))
                     else:
                         print(f"Warning: {srt_file} does not exist. Skipping.")
-
                 if (options["no_data"]): encode_job.exclude_data()
                 if (options["fix_resolution"]): encode_job.fix_resolution()
                 if (options["fix_err"]): encode_job.fix_errors()
@@ -200,337 +431,17 @@ class ReencodePane(wx.CollapsiblePane):
                 if (pathlib.Path(encode_job.output).exists()):
                     print(f"Output file '{encode_job.output}' already exists. Skipping.")
                     continue
-                
                 wx.Yield()
                 do_execute(encode_job.reencode_str())
                 progress += 1
-                reencode_pane.total_progress.SetValue(progress)
-            except:
-                print("What-Ho? There was some sort of issue, I'm afraid...")
-
-        main_frame.Enable()
-        main_frame.listbox.refresh()
-
-class VideoInfoPanel(wx.Panel):
-    def __init__(self, parent):
-        super().__init__(parent, style=wx.RAISED_BORDER)
-
-        self.scrollable_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
-        self.scrollable_panel.SetScrollRate(5, 5)
-
-        self.filename_label = wx.StaticText(self.scrollable_panel, label="Filename:")
-        self.filename = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.resolution_label = wx.StaticText(self.scrollable_panel, label="Resolution:")
-        self.resolution = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-        
-        self.size_label = wx.StaticText(self.scrollable_panel, label="Size:")
-        self.size = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.runtime_label = wx.StaticText(self.scrollable_panel, label="Runtime:")
-        self.runtime = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.codec_label = wx.StaticText(self.scrollable_panel, label="Codec:")
-        self.codec = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.audio_streams_label = wx.StaticText(self.scrollable_panel, label="Audio Streams:")
-        self.audio_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.video_streams_label = wx.StaticText(self.scrollable_panel, label="Video Streams:")
-        self.video_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.subtitle_streams_label = wx.StaticText(self.scrollable_panel, label="Subtitle Streams:")
-        self.subtitle_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        self.data_streams_label = wx.StaticText(self.scrollable_panel, label="Data Streams:")
-        self.data_streams = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-
-        filename_row = wx.BoxSizer(wx.HORIZONTAL)
-        filename_row.Add(self.filename_label, 0, wx.ALL, 5)
-        filename_row.Add(self.filename, 1, wx.EXPAND | wx.ALL, 5)
-
-        resolution_runtime_row = wx.BoxSizer(wx.HORIZONTAL)
-        resolution_runtime_row.Add(self.resolution_label, 0, wx.ALL, 5)
-        resolution_runtime_row.Add(self.resolution, 1, wx.EXPAND | wx.ALL, 5)
-        resolution_runtime_row.Add(self.runtime_label, 0, wx.ALL, 5)
-        resolution_runtime_row.Add(self.runtime, 1, wx.EXPAND | wx.ALL, 5)
-        resolution_runtime_row.Add(self.size_label, 0, wx.ALL, 5)
-        resolution_runtime_row.Add(self.size, 1, wx.EXPAND | wx.ALL, 5)
-
-        codec_row = wx.BoxSizer(wx.HORIZONTAL)
-        codec_row.Add(self.codec_label, 0, wx.ALL, 5)
-        codec_row.Add(self.codec, 1, wx.EXPAND | wx.ALL, 5)
-
-        video_streams_row = wx.BoxSizer(wx.HORIZONTAL)
-        video_streams_row.Add(self.video_streams_label, 0, wx.ALL, 5)
-        video_streams_row.Add(self.video_streams, 1, wx.EXPAND | wx.ALL, 5)
-
-        audio_streams_row = wx.BoxSizer(wx.HORIZONTAL)
-        audio_streams_row.Add(self.audio_streams_label, 0, wx.ALL, 5)
-        audio_streams_row.Add(self.audio_streams, 1, wx.EXPAND | wx.ALL, 5)
-
-        subtitle_streams_row = wx.BoxSizer(wx.HORIZONTAL)
-        subtitle_streams_row.Add(self.subtitle_streams_label, 0, wx.ALL, 5)
-        subtitle_streams_row.Add(self.subtitle_streams, 1, wx.EXPAND | wx.ALL, 5)
-
-        data_streams_row = wx.BoxSizer(wx.HORIZONTAL)
-        data_streams_row.Add(self.data_streams_label, 0, wx.ALL, 5)
-        data_streams_row.Add(self.data_streams, 1, wx.EXPAND | wx.ALL, 5)
-
-        sizer.Add(filename_row, 0, wx.EXPAND)
-        sizer.Add(resolution_runtime_row, 0, wx.EXPAND)
-        sizer.Add(codec_row, 0, wx.EXPAND)
-        sizer.Add(video_streams_row, 0, wx.EXPAND)
-        sizer.Add(audio_streams_row, 0, wx.EXPAND)
-        sizer.Add(subtitle_streams_row, 0, wx.EXPAND)
-        sizer.Add(data_streams_row, 0, wx.EXPAND)
-
-        self.scrollable_panel.SetSizer(sizer)
-        sizer.Fit(self.scrollable_panel)
-
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.Add(self.scrollable_panel, 1, wx.EXPAND)
-        self.SetSizer(main_sizer)
-
-    def update_info(self, info):
-        self.filename.SetValue(pathlib.Path(info.filename).name)
-        self.resolution.SetValue(f"{info.max_width}x{info.max_height}")
-        if (info.size_kb < 1024):
-            self.size.SetValue(f"{info.size_kb:.2f} KB")
-        elif (info.size_mb < 1024):
-            self.size.SetValue(f"{info.size_mb:.2f} MB")
-        else:
-            self.size.SetValue(f"{info.size_gb:.2f} GB")
-
-        self.runtime.SetValue(str(info.runtime))
-        codec_list = []
-        if info.video_streams:
-            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.video_streams]))
-        if info.audio_streams:
-            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.audio_streams]))
-        if info.subtitle_streams:
-            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.subtitle_streams]))
-        if info.data_streams:
-            codec_list.append(", ".join([stream["codec_long_name"] for stream in info.data_streams]))
-        self.codec.SetValue(" / ".join(codec_list))
-
-        audio_stream_text = "\n".join([info.get_audio_stream_description(stream) for stream in info.audio_streams])
-        self.audio_streams.SetValue(audio_stream_text.strip())
-
-        video_stream_text = "\n".join([info.get_video_stream_description(stream) for stream in info.video_streams])
-        self.video_streams.SetValue(video_stream_text.strip())
-
-        subtitle_stream_text = "\n".join([info.get_subtitle_stream_description(stream) for stream in info.subtitle_streams])
-        self.subtitle_streams.SetValue(subtitle_stream_text.strip())
-
-class VideoList(wx.ListCtrl):
-    def __init__(self, parent):
-        super().__init__(parent, style=wx.LC_REPORT | wx.SUNKEN_BORDER)
-        self.InsertColumn(0, 'Filename')
-        self.SetColumnWidth(0, 300)
-        self.InsertColumn(1, 'Video')
-        self.InsertColumn(2, 'Audio')
-        self.InsertColumn(3, 'Res')
-        self.InsertColumn(4, 'Size')
-        self.EnableCheckBoxes()
-        self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnSelected)
-        self.Bind(wx.EVT_LIST_ITEM_CHECKED, self.OnChecked)
-        self.refresh()
-
-    def OnSelected(self, event):
-        global video_list, selected_video, working_dir, main_frame
-
-        selection = self.GetFirstSelected()
-        if selection == -1:
-            main_frame.SetStatusText("No selection")
-            return
-
-        item = self.GetItemText(selection, 0)
-        main_frame.SetStatusText(f"Selected: {item}")
-        selected_video = working_dir / item
-        info = video.info(selected_video)
-        vid_info_panel.update_info(info)
-    
-    def OnChecked(self, event):
-        global video_list, working_dir
-        video_list = []
-        
-        #Iterate over all items in the listbox and add the checked items to the video_list
-        for i in range(self.GetItemCount()):
-            if self.IsItemChecked(i):
-                video_list.append(str(working_dir / self.GetItemText(i, 0)))
-
-    def refresh(self):
-        global video_list, working_dir
-        video_list = []
-        self.DeleteAllItems()
-        files = sorted(
-            p.resolve()
-            for p in pathlib.Path(working_dir).glob("**/*")
-            if p.suffix in VIDEO_EXTENSIONS
-        )
-        
-        i = 0
-        for v in files:
-            video_str = str(v.relative_to(working_dir))
-            self.InsertItem(i, video_str)
-            i += 1
-class MyFrame(wx.Frame):
-    def __init__(self):
-        global config, reencode_pane, vid_info_panel, working_dir
-        
-        super().__init__(parent=None, title="Vid Tool")
-
-        panel = wx.Panel(self)
-        sizer = wx.BoxSizer(wx.VERTICAL)
-
-        notebook = wx.Notebook(panel)
-        main_panel = wx.Panel(notebook)
-        log_panel = wx.Panel(notebook)
-
-        notebook.AddPage(main_panel, "Main")
-        notebook.AddPage(log_panel, "Log")
-
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        top = wx.BoxSizer(wx.HORIZONTAL)
-        middle = wx.BoxSizer(wx.HORIZONTAL)
-        play_size = wx.BoxSizer(wx.HORIZONTAL)
-        bottom = wx.BoxSizer(wx.VERTICAL)
-        
-        self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
-
-        working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
-        self.working_dir_box = wx.TextCtrl(main_panel)
-        self.working_dir_box.SetValue(str(working_dir))
-
-        self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
-        self.button.SetDefault()
-        self.button.SetFocus()
-        self.button.Bind(wx.EVT_BUTTON, self.OnChangeDir)
-
-        self.refresh_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_REDO, wx.ART_BUTTON))
-        self.refresh_button.Bind(wx.EVT_BUTTON, self.OnRefresh)
-        
-        self.up_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_GO_TO_PARENT, wx.ART_BUTTON))
-        self.up_button.Bind(wx.EVT_BUTTON, self.OnGoUp)
-
-        top.Add(self.label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        top.Add(self.working_dir_box, 1, wx.CENTRE | wx.ALL | wx.EXPAND, 0)
-        top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
-        top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
-        top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
-
-        self.listbox = VideoList(main_panel)
-
-        vid_info_panel = VideoInfoPanel(main_panel)
-
-        middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
-        middle.Add(vid_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
-
-        self.select_all_button = wx.Button(main_panel, label="Select All")
-        self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
-
-        self.select_none_button = wx.Button(main_panel, label="Select None")
-        self.select_none_button.Bind(wx.EVT_BUTTON, self.OnSelectNone)
-
-        self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
-        self.play_button = wx.Button(main_panel, label="Play")
-        self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
-        reencode_pane = ReencodePane(main_panel)
-        reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
-        reencode_pane.Expand()
-        reencode_pane.Layout()
-        reencode_pane.Fit()
-        
-        play_size.Add(self.select_all_button, 0, wx.ALL, 5)
-        play_size.Add(self.select_none_button, 0, wx.ALL, 5)
-        play_size.Add(self.play_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        play_size.Add(self.play_button, 0, wx.ALL, 5)
-        bottom.Add(reencode_pane, 0, wx.GROW | wx.ALL, 5)
-        
-        main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
-
-        main_panel.SetSizer(main_sizer)
-
-        log_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.text = wx.TextCtrl(log_panel, style=wx.TE_MULTILINE)
-        self.text.SetValue("This is a text control.")
-        log_sizer.Add(self.text, 1, wx.EXPAND | wx.ALL, 5)
-        log_panel.SetSizer(log_sizer)
-
-        sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 5)
-
-        panel.SetSizer(sizer)
-
-        self.CreateStatusBar()
-        self.SetStatusText("Welcome to Vid Tool!")
-
-        self.SetSize((1200, 600))
-        self.Center()
-
-        self.Bind(wx.EVT_CLOSE, self.OnClose)
-
-        self.Show()
-
-    def OnChangeDir(self, event):
-        global config, working_dir
-        
-        dlg = wx.DirDialog(self, "Choose a directory:", str(working_dir), wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,)
-        if dlg.ShowModal() == wx.ID_OK:
-            working_dir = pathlib.Path(dlg.GetPath()).resolve()
-            self.working_dir_box.SetValue(str(working_dir))
-            self.SetStatusText(f"Working directory: {str(working_dir)}")
-            self.listbox.refresh()
-            config["working_dir"] = str(working_dir)
-        dlg.Destroy()
-
-    def OnRefresh(self, event):
-        self.listbox.refresh()
-        self.SetStatusText("File list refreshed.")
-
-    def OnGoUp(self, event):
-        global working_dir
-        working_dir = working_dir.parent
-        self.working_dir_box.SetValue(str(working_dir))
-        self.SetStatusText(f"Working directory: {str(working_dir)}")
-        self.listbox.refresh()
-
-    def OnClose(self, event):
-        global config, reencode_pane
-        config["output_extension"] = reencode_pane.extension_choice.GetStringSelection()
-        config["output_suffix"] = reencode_pane.suffix_textbox.GetValue()
-        config["append_res"] = reencode_pane.append_res_checkbox.GetValue()
-        config["encode_video"] = reencode_pane.vcodec_checkbox.GetValue()
-        config["video_codec"] = reencode_pane.vcodec_choice.GetStringSelection()
-        config["encode_audio"] = reencode_pane.acodec_checkbox.GetValue()
-        config["audio_codec"] = reencode_pane.acodec_choice.GetStringSelection()
-        config["no_data"] = reencode_pane.exclude_data_streams.GetValue()
-        config["fix_resolution"] = reencode_pane.fix_res.GetValue()
-        config["fix_err"] = reencode_pane.fix_errors.GetValue()
-        config["use_crf"] = reencode_pane.crf_checkbox.GetValue()
-        config["crf_value"] = str(reencode_pane.crf_int.GetValue())
-        config["working_dir"] = str(working_dir)
-        self.Destroy()
-        
-    def OnPlay(self, event):
-        print("Play button clicked")
-        video.play(selected_video)
-        event.Skip(True)
-
-    def OnSelectAll(self, event):
-        for i in range(self.listbox.GetItemCount()):
-            self.listbox.CheckItem(i)
-        self.listbox.OnChecked(event)
-
-    def OnSelectNone(self, event):
-        for i in range(self.listbox.GetItemCount()):
-            self.listbox.CheckItem(i, False)
-        self.listbox.OnChecked(event)
+                self.total_progress.SetValue(progress)
+            except Exception as e:
+                print(f"What-Ho? There was some sort of issue, I'm afraid... {e}")
+        self.GetParent().Enable()
+        # Use wx.GetTopLevelParent(self) to access the frame and its listbox
+        top_frame = wx.GetTopLevelParent(self)
+        if hasattr(top_frame, "listbox"):
+            top_frame.listbox.refresh()
 
 class MyApp(wx.App):
     def OnInit(self):
