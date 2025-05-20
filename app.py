@@ -82,6 +82,7 @@ class VideoList(wx.ListCtrl):
         super().__init__(parent, style=wx.LC_REPORT | wx.SUNKEN_BORDER)
         self.main_frame = main_frame
         self.vid_info_panel = vid_info_panel
+        self.info_cache = {}  # filename (str) -> video.info object
         for idx, (label, width) in enumerate(self.COLS):
             self.InsertColumn(idx, label)
             self.SetColumnWidth(idx, width)
@@ -101,9 +102,12 @@ class VideoList(wx.ListCtrl):
         if self.main_frame:
             self.main_frame.SetStatusText(f"Selected: {item}")
         selected_video = working_dir / item
-        info = video.info(selected_video)
+        info_obj = self.info_cache.get(str(selected_video))
+        if not info_obj:
+            info_obj = video.info(selected_video)
+            self.info_cache[str(selected_video)] = info_obj
         if self.vid_info_panel:
-            self.vid_info_panel.update_info(info)
+            self.vid_info_panel.update_info(info_obj)
 
     def OnChecked(self, event):
         global video_list, working_dir
@@ -116,15 +120,57 @@ class VideoList(wx.ListCtrl):
         global video_list, working_dir
         video_list = []
         self.DeleteAllItems()
+        self.info_cache = {}
         if not working_dir:
             return
-        files = sorted(
-            p.resolve()
-            for p in pathlib.Path(working_dir).glob("**/*")
-            if p.suffix in VIDEO_EXTENSIONS
-        )
-        for i, v in enumerate(files):
-            self.InsertItem(i, str(v.relative_to(working_dir)))
+        wd = working_dir  # capture current working_dir for thread safety
+        def scan_and_update():
+            files = []
+            info_cache = {}
+            for p in sorted(pathlib.Path(wd).glob("**/*")):
+                if p.suffix in VIDEO_EXTENSIONS:
+                    abs_path = str(p.resolve())
+                    files.append(p.resolve())
+                    try:
+                        info_cache[abs_path] = video.info(abs_path)
+                    except Exception as e:
+                        print(f"Failed to get info for {abs_path}: {e}")
+            def update_ui():
+                global video_list
+                if working_dir != wd:
+                    return
+                self.DeleteAllItems()
+                for i, v in enumerate(files):
+                    abs_path = str(v)
+                    rel_path = str(v.relative_to(wd))
+                    info_obj = info_cache.get(abs_path)
+                    # Default values
+                    video_codec = audio_codec = res = size_str = ""
+                    if info_obj:
+                        # Video codec
+                        if info_obj.video_streams:
+                            video_codec = info_obj.video_streams[0].get("codec_name", "")
+                        # Audio codec
+                        if info_obj.audio_streams:
+                            audio_codec = info_obj.audio_streams[0].get("codec_name", "")
+                        # Resolution
+                        res = f"{info_obj.max_width}x{info_obj.max_height}" if info_obj.max_width and info_obj.max_height else ""
+                        # Size
+                        if info_obj.size_kb < 1024:
+                            size_str = f"{info_obj.size_kb:.2f} KB"
+                        elif info_obj.size_mb < 1024:
+                            size_str = f"{info_obj.size_mb:.2f} MB"
+                        else:
+                            size_str = f"{info_obj.size_gb:.2f} GB"
+                    self.InsertItem(i, rel_path)
+                    self.SetItem(i, 1, video_codec)
+                    self.SetItem(i, 2, audio_codec)
+                    self.SetItem(i, 3, res)
+                    self.SetItem(i, 4, size_str)
+                self.info_cache = info_cache
+                video_list = []
+            wx.CallAfter(update_ui)
+        threading.Thread(target=scan_and_update, daemon=True).start()
 
 class MyFrame(wx.Frame):
     def __init__(self):
