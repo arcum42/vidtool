@@ -406,6 +406,7 @@ class ReencodePane(wx.CollapsiblePane):
 
     def OnReencode(self, event):
         print("Reencode button clicked")
+        self.reencode_button.Disable()
         options = {}
         options["output_extension"] = self.extension_choice.GetStringSelection()
         options["output_suffix"] = self.suffix_textbox.GetValue()
@@ -432,7 +433,6 @@ class ReencodePane(wx.CollapsiblePane):
                         print(line, end='')
                 # No wx.Yield() in thread
 
-        wx.CallAfter(self.GetParent().Disable)
         wx.CallAfter(self.total_progress.SetValue, 0)
         wx.CallAfter(self.total_progress.SetRange, len(video_list))
         progress = 0
@@ -488,7 +488,7 @@ class ReencodePane(wx.CollapsiblePane):
                 wx.CallAfter(self.total_progress.SetValue, progress)
             except Exception as e:
                 print(f"What-Ho? There was some sort of issue, I'm afraid... {e}")
-        wx.CallAfter(self.GetParent().Enable)
+        wx.CallAfter(self.reencode_button.Enable)
         # Use wx.GetTopLevelParent(self) to access the frame and its listbox
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):
