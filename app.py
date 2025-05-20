@@ -374,25 +374,25 @@ class ReencodePane(wx.CollapsiblePane):
         options["fix_err"] = self.fix_errors.GetValue()
         options["use_crf"] = self.crf_checkbox.GetValue()
         options["crf_value"] = str(self.crf_int.GetValue())
-        
-        wx.CallAfter(self.ReEncodeAfter, options)
+        # Start reencoding in a background thread
+        threading.Thread(target=self.ReEncodeWorker, args=(options,), daemon=True).start()
 
-    def ReEncodeAfter(self, options):
+    def ReEncodeWorker(self, options):
         def do_execute(cmd):
             print(subprocess.list2cmdline(cmd))
             with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
                 if p.stdout:
                     for line in p.stdout:
                         print(line, end='')
-                        wx.Yield()
-                wx.Yield()
+                # No wx.Yield() in thread
 
-        self.GetParent().Disable()
+        wx.CallAfter(self.GetParent().Disable)
+        wx.CallAfter(self.total_progress.SetValue, 0)
+        wx.CallAfter(self.total_progress.SetRange, len(video_list))
         progress = 0
-        self.total_progress.SetValue(0)
-        self.total_progress.SetRange(len(video_list))
         for video_file in video_list:
-            if not video_file: continue
+            if not video_file:
+                continue
             print(f"Encoding video_file: {video_file}")
             try:
                 info = video.info(video_file)
@@ -408,14 +408,16 @@ class ReencodePane(wx.CollapsiblePane):
                     output_suffix = f"_{output_suffix}"
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
-                encode_job.add_output_from_input(file_append = output_suffix, file_extension = options["output_extension"])
-                if (options["encode_video"]): encode_job.set_video_codec(options["video_codec"])
-                if (options["encode_audio"]): encode_job.set_audio_codec(options["audio_codec"])
-                if (options["subtitles"] == "None"):
+                encode_job.add_output_from_input(file_append=output_suffix, file_extension=options["output_extension"])
+                if options["encode_video"]:
+                    encode_job.set_video_codec(options["video_codec"])
+                if options["encode_audio"]:
+                    encode_job.set_audio_codec(options["audio_codec"])
+                if options["subtitles"] == "None":
                     encode_job.exclude_subtitles()
-                elif (options["subtitles"] == "All"):
+                elif options["subtitles"] == "All":
                     encode_job.copy_subtitles()
-                elif (options["subtitles"] == "srt"):
+                elif options["subtitles"] == "srt":
                     print("Adding srt file")
                     srt_file = pathlib.Path(video_file).with_suffix(".srt")
                     print(f"Adding srt file: {srt_file}")
@@ -424,24 +426,27 @@ class ReencodePane(wx.CollapsiblePane):
                         encode_job.add_input(str(srt_file))
                     else:
                         print(f"Warning: {srt_file} does not exist. Skipping.")
-                if (options["no_data"]): encode_job.exclude_data()
-                if (options["fix_resolution"]): encode_job.fix_resolution()
-                if (options["fix_err"]): encode_job.fix_errors()
-                if (options["use_crf"]): encode_job.set_crf(options["crf_value"])
-                if (pathlib.Path(encode_job.output).exists()):
+                if options["no_data"]:
+                    encode_job.exclude_data()
+                if options["fix_resolution"]:
+                    encode_job.fix_resolution()
+                if options["fix_err"]:
+                    encode_job.fix_errors()
+                if options["use_crf"]:
+                    encode_job.set_crf(options["crf_value"])
+                if pathlib.Path(encode_job.output).exists():
                     print(f"Output file '{encode_job.output}' already exists. Skipping.")
                     continue
-                wx.Yield()
                 do_execute(encode_job.reencode_str())
                 progress += 1
-                self.total_progress.SetValue(progress)
+                wx.CallAfter(self.total_progress.SetValue, progress)
             except Exception as e:
                 print(f"What-Ho? There was some sort of issue, I'm afraid... {e}")
-        self.GetParent().Enable()
+        wx.CallAfter(self.GetParent().Enable)
         # Use wx.GetTopLevelParent(self) to access the frame and its listbox
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):
-            top_frame.listbox.refresh()
+            wx.CallAfter(top_frame.listbox.refresh)
 
 class MyApp(wx.App):
     def OnInit(self):

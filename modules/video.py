@@ -8,186 +8,130 @@ ffprobe_bin = "ffprobe"
 ffmpeg_bin = "ffmpeg"
 ffplay_bin = "ffplay"
 
-VIDEO_EXTENSIONS = [
-    ".mkv",
-    ".mp4",
-    ".webm",
-    ".ogv",
-    ".avi",
-    ".mpg",
-    ".mov",
-    ".wmv",
-    ".mov",
-    ".m4v",
-    ".ogm",
-    ".ogv",
-    ".flv",
-    ".divx",
-    ".mpeg"
-]
+VIDEO_EXTENSIONS = (
+    ".mkv", ".mp4", ".webm", ".ogv", ".avi", ".mpg", ".mov", ".wmv", ".m4v", ".ogm", ".flv", ".divx", ".mpeg"
+)
 
-VIDEO_CODECS = [
-    "copy",
-    "libx264",
-    "libx265",
-    "libxvid",
-    "libvpx-vp9",
-    "nvenc_h264",
-    "nvenc_hevc"
-]
-AUDIO_CODECS = [
-    "copy",
-    "aac",
-    "mp3",
-    "flac",
-    "ogg",
-    "ac3",
-    "opus"
-]
+VIDEO_CODECS = (
+    "copy", "libx264", "libx265", "libxvid", "libvpx-vp9", "nvenc_h264", "nvenc_hevc"
+)
+AUDIO_CODECS = (
+    "copy", "aac", "mp3", "flac", "ogg", "ac3", "opus"
+)
 
 def execute(cmd):
-    #print(f"Command line:{cmd}")
+    """Run a command and print its output line by line."""
     print(subprocess.list2cmdline(cmd))
-
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
-        for line in p.stdout:
-            print(line, end='')  # process line here
-
-    #if p.returncode != 0:
-    #    raise subprocess.CalledProcessError(p.returncode, p.args)
+        if p.stdout:
+            for line in p.stdout:
+                print(line, end='')
 
 def play(video):
-    cmd = [ffplay_bin, str(video)]
-    execute(cmd)
+    """Play a video file using ffplay."""
+    execute([ffplay_bin, str(video)])
 
 class info:
+    """Extracts and holds metadata for a video file."""
     def __init__(self, file):
-        #print(f"Getting info for {file}")
         self.file = file
         self.metadata = self.get_metadata(file)
-        self.format_info = self.metadata["format"]
+        self.format_info = self.metadata.get("format", {})
+        streams = self.metadata.get("streams", [])
+        self.video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        self.audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+        self.subtitle_streams = [s for s in streams if s.get("codec_type") == "subtitle"]
+        self.data_streams = [s for s in streams if s.get("codec_type") == "data"]
+        self.max_width, self.max_height = self.get_video_dimensions()
+        self.duration = float(self.format_info.get("duration", 0))
+        self.size = int(self.format_info.get("size", 0))
+        self.size_kb = self.size / 1024
+        self.size_mb = self.size_kb / 1024
+        self.size_gb = self.size_mb / 1024
+        self.bitrate = int(self.format_info.get("bit_rate", 0))
+        self.runtime = str(datetime.timedelta(seconds=self.duration))
+        self.filename = self.format_info.get("filename", str(file))
 
-        self.video_streams = [stream for stream in self.metadata["streams"] if stream["codec_type"] == "video"]
-        self.audio_streams = [stream for stream in self.metadata["streams"] if stream["codec_type"] == "audio"]
-        self.subtitle_streams = [stream for stream in self.metadata["streams"] if stream["codec_type"] == "subtitle"]
-        self.data_streams = [stream for stream in self.metadata["streams"] if stream["codec_type"] == "data"]
-
-        self.max_width, self.max_height = 0, 0
-        self.get_video_dimensions()
-
-        self.duration = float(self.format_info["duration"])
-        self.size = int(self.format_info["size"])
-        self.size_kb = self.size/1024
-        self.size_mb = self.size_kb/1024
-        self.size_gb = self.size_mb/1024
-        self.bitrate = int(self.format_info["bit_rate"])
-        self.runtime = str(datetime.timedelta(seconds=float(self.format_info["duration"])))
-        self.filename = self.format_info["filename"]
-
-    def get_metadata(self, file):
-        result = subprocess.run(
-            [ffprobe_bin, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file],
-            stdout=subprocess.PIPE
-        )
+    @staticmethod
+    def get_metadata(file):
+        result = subprocess.run([
+            ffprobe_bin, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file
+        ], stdout=subprocess.PIPE)
         return json.loads(result.stdout)
 
     def get_video_dimensions(self):
+        max_width = max_height = 0
         for stream in self.video_streams:
             temp_width = int(stream.get('width', stream.get('coded_width', 0)))
             temp_height = int(stream.get('height', stream.get('coded_height', 0)))
-            if temp_width > self.max_width:  # prefer the largest video stream
-                self.max_width = temp_width
-            if temp_height > self.max_height:
-                self.max_height = temp_height
+            max_width = max(max_width, temp_width)
+            max_height = max(max_height, temp_height)
+        return max_width, max_height
 
     def print_json(self):
         print(json.dumps(self.metadata, indent=4))
 
     def get_video_stream_description(self, stream):
-        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-        if stream.get("height", 0) > 0:
-            stream_text += f' - {stream.get("width", "N/A")} x {stream.get("height", "N/A")}'
-        if stream.get("coded_height", 0) > 0:
-            stream_text += f' - {stream.get("coded_width", "N/A")} x {stream.get("coded_height", "N/A")}'
-        if stream.get("display_aspect_ratio", "N/A") != "N/A":
-            stream_text += f' - DAR: {stream.get("display_aspect_ratio", "N/A")}'
-        stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
-        return stream_text
-    
+        s = stream
+        desc = f'#{s.get("index", "?")} {s.get("codec_type", "?")}: {s.get("codec_long_name", "?")}'
+        if s.get("height", 0) > 0:
+            desc += f' - {s.get("width", "N/A")} x {s.get("height", "N/A")}'
+        if s.get("coded_height", 0) > 0:
+            desc += f' - {s.get("coded_width", "N/A")} x {s.get("coded_height", "N/A")}'
+        if s.get("display_aspect_ratio", "N/A") != "N/A":
+            desc += f' - DAR: {s.get("display_aspect_ratio", "N/A")}'
+        desc += f' - bitrate: {s.get("bit_rate", "N/A")}'
+        return desc
+
     def get_audio_stream_description(self, stream):
-        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}'
-        if stream.get("channels", 0) > 0:
-            stream_text += f' - channels: {stream["channels"]}'
-        stream_text += f' - bitrate: {stream.get("bit_rate", "N/A")}\n'
-        return stream_text
+        s = stream
+        desc = f'#{s.get("index", "?")} {s.get("codec_type", "?")}: {s.get("codec_long_name", "?")}'
+        if s.get("channels", 0) > 0:
+            desc += f' - channels: {s.get("channels")}'
+        desc += f' - bitrate: {s.get("bit_rate", "N/A")}'
+        return desc
 
     def get_subtitle_stream_description(self, stream):
-        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
-        return stream_text
+        return f'#{stream.get("index", "?")} {stream.get("codec_type", "?")}: {stream.get("codec_long_name", "?")}'
 
     def get_data_stream_description(self, stream):
-        stream_text = f'#{stream["index"]} {stream["codec_type"]}: {stream["codec_long_name"]}\n'
-        return stream_text
+        return f'#{stream.get("index", "?")} {stream.get("codec_type", "?")}: {stream.get("codec_long_name", "?")}'
 
     def get_info_block(self):
-        info_block = ""
-        info_block += f'{self.format_info["filename"]} - {self.format_info["format_name"]} - {self.format_info["format_long_name"]}, Runtime = {self.runtime}\n'
-        if self.max_width % 2 == 1 or self.max_height % 2 == 1:
+        info_block = f'{self.format_info.get("filename", "?")} - {self.format_info.get("format_name", "?")} - {self.format_info.get("format_long_name", "?")}, Runtime = {self.runtime}\n'
+        if self.max_width % 2 or self.max_height % 2:
             info_block += f'Warning: Resolution ({self.max_width}x{self.max_height}) is not divisible by 2.\n'
-
-        if len(self.video_streams) > 0:
-            if len(self.video_streams) > 1:
-                info_block += f'{len(self.video_streams)} Video streams: {self.max_width}x{self.max_height}\n'
-            else:
-                info_block += f'{len(self.video_streams)} Video stream: {self.max_width}x{self.max_height}\n'
-
-            for stream in self.video_streams:
-                stream_text = self.get_video_stream_description(stream)
-                info_block += stream_text
-
-        if len(self.audio_streams) > 0:
-            if len(self.audio_streams) > 1:
-                info_block += f'{len(self.audio_streams)} Audio streams:'
-            else:
-                info_block += f'{len(self.audio_streams)} Audio stream:'
-
-            for stream in self.audio_streams:
-                stream_text = self.get_audio_stream_description(stream)
-                info_block += stream_text
-
-        if len(self.subtitle_streams) > 0:
-            if len(self.subtitle_streams) > 1:
-                info_block += f'{len(self.subtitle_streams)} Subtitle streams:'
-            else:
-                info_block += f'{len(self.subtitle_streams)} Subtitle stream:'
-
-            for stream in self.subtitle_streams:
-                stream_text = self.get_subtitle_stream_description(stream)
-                info_block += stream_text
-
-        if len(self.data_streams) > 0:
-            if len(self.data_streams) > 1:
-                info_block += f'{len(self.data_streams)} Data streams:'
-            else:
-                info_block += f'{len(self.data_streams)} Data stream:'
-
-            for stream in self.data_streams:
-                stream_text = self.get_data_stream_description(stream)
-                info_block += stream_text
+        if self.video_streams:
+            info_block += f'{len(self.video_streams)} Video stream{"s" if len(self.video_streams) > 1 else ""}: {self.max_width}x{self.max_height}\n'
+            for s in self.video_streams:
+                info_block += self.get_video_stream_description(s) + "\n"
+        if self.audio_streams:
+            info_block += f'{len(self.audio_streams)} Audio stream{"s" if len(self.audio_streams) > 1 else ""}:\n'
+            for s in self.audio_streams:
+                info_block += self.get_audio_stream_description(s) + "\n"
+        if self.subtitle_streams:
+            info_block += f'{len(self.subtitle_streams)} Subtitle stream{"s" if len(self.subtitle_streams) > 1 else ""}:\n'
+            for s in self.subtitle_streams:
+                info_block += self.get_subtitle_stream_description(s) + "\n"
+        if self.data_streams:
+            info_block += f'{len(self.data_streams)} Data stream{"s" if len(self.data_streams) > 1 else ""}:\n'
+            for s in self.data_streams:
+                info_block += self.get_data_stream_description(s) + "\n"
         return info_block
-    
+
     def print_info(self):
         print(self.get_info_block())
 
     def rename_resolution(self):
         p = pathlib.Path(self.file)
         new_file_name = f"{p.stem}-{self.max_width}x{self.max_height}{p.suffix}"
-        new_path = pathlib.Path(p.parent, new_file_name)
+        new_path = p.parent / new_file_name
         if not new_path.exists():
             print(f"{p} -> {new_path}")
             p.rename(new_path)
 
 class encode:
+    """Builds and runs ffmpeg encode commands."""
     def __init__(self):
         self.input = []
         self.file_info = []
@@ -198,11 +142,7 @@ class encode:
         self.arguments.append('-hide_banner')
 
     def parsable_output(self):
-        self.arguments.append('-stats')
-        self.arguments.append('-loglevel')
-        self.arguments.append('error')
-        self.arguments.append('-progress')
-        self.arguments.append('-')
+        self.arguments += ['-stats', '-loglevel', 'error', '-progress', '-']
 
     def add_input(self, input_file):
         self.input.append(input_file)
@@ -213,16 +153,14 @@ class encode:
     def add_output(self, output_file):
         self.output = output_file
 
-    def add_output_from_input(self, file_append, file_extension, idx = 0):
+    def add_output_from_input(self, file_append, file_extension, idx=0):
         if not file_extension.startswith('.'):
             file_extension = '.' + file_extension
-
         input_file = pathlib.Path(self.input[idx])
         self.output = input_file.with_stem(input_file.stem + file_append).with_suffix(file_extension)
-        #print(f'input = {input_file}, output = {self.output}')
 
     def map_all_streams(self, input_index):
-        self.arguments.extend(['-map', input_index])
+        self.arguments += ['-map', input_index]
 
     def exclude_video(self):
         self.arguments.append('-vn')
@@ -237,22 +175,22 @@ class encode:
         self.arguments.append('-dn')
 
     def set_video_codec(self, codec):
-        self.arguments.extend(['-vcodec', codec])
+        self.arguments += ['-vcodec', codec]
 
     def set_audio_codec(self, codec):
-        self.arguments.extend(['-acodec', codec])
+        self.arguments += ['-acodec', codec]
 
     def set_subtitle_codec(self, codec):
-        self.arguments.extend(['-scodec', codec])
+        self.arguments += ['-scodec', codec]
 
     def set_crf(self, crf):
-        self.arguments.extend(['-crf', crf])
+        self.arguments += ['-crf', crf]
 
     def fix_resolution(self):
-        self.arguments.extend(['-vf', 'scale=trunc(oh*a/2)*2:trunc(ow/a/2)*2'])
+        self.arguments += ['-vf', 'scale=trunc(oh*a/2)*2:trunc(ow/a/2)*2']
 
     def fix_errors(self):
-        self.arguments.extend(['-err_detect', 'ignore_err'])
+        self.arguments += ['-err_detect', 'ignore_err']
 
     def copy_subtitles(self):
         self.map_all_streams('0')
@@ -263,30 +201,22 @@ class encode:
         self.set_crf('28')
 
     def custom_flags(self, flags):
-        self.arguments.extend(' '.join(flags).split())
+        self.arguments += ' '.join(flags).split()
 
     def reencode_str(self):
         cmd = [ffmpeg_bin]
         self.less_noise()
-        #self.parsable_output()
         for input_file in self.input:
-            cmd.extend(['-i', str(input_file)])
-        cmd.extend(self.arguments)
+            cmd += ['-i', str(input_file)]
+        cmd += self.arguments
         cmd.append(str(self.output))
         return cmd
 
     def reencode(self):
-        cmd = [ffmpeg_bin]
-        self.less_noise()
-        #self.parsable_output()
-        for input_file in self.input:
-            cmd.extend(['-i', str(input_file)])
-        cmd.extend(self.arguments)
-        cmd.append(str(self.output))
-        execute(cmd)
+        execute(self.reencode_str())
 
 def batch_rename(the_path):
-    files = (p.resolve() for p in pathlib.Path(the_path).glob("**/*") if p.suffix in {".avi", ".mpg", ".mkv", ".mp4", ".mov", ".webm", ".wmv", ".mov", ".m4v", ".ogv", ".divx"})
+    files = (p.resolve() for p in pathlib.Path(the_path).glob("**/*") if p.suffix in VIDEO_EXTENSIONS)
     for video in files:
         v = info(video)
         print(f"{video} = {v.max_width}x{v.max_height}")
