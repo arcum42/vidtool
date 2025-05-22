@@ -185,7 +185,6 @@ class MyFrame(wx.Frame):
         notebook.AddPage(log_panel, "Log")
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         top = wx.BoxSizer(wx.HORIZONTAL)
-        middle = wx.BoxSizer(wx.HORIZONTAL)
         play_size = wx.BoxSizer(wx.HORIZONTAL)
         bottom = wx.BoxSizer(wx.VERTICAL)
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
@@ -205,10 +204,15 @@ class MyFrame(wx.Frame):
         top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
         top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
         top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
-        self.vid_info_panel = VideoInfoPanel(main_panel)
-        self.listbox = VideoList(main_panel, main_frame=self, vid_info_panel=self.vid_info_panel)
-        middle.Add(self.listbox, 1, wx.LEFT | wx.EXPAND, 5)
-        middle.Add(self.vid_info_panel, 1, wx.RIGHT | wx.EXPAND, 5)
+
+        # --- Splitter Window for Video List and Info ---
+        splitter = wx.SplitterWindow(main_panel)
+        self.vid_info_panel = VideoInfoPanel(splitter)
+        self.listbox = VideoList(splitter, main_frame=self, vid_info_panel=self.vid_info_panel)
+        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=600)
+        splitter.SetMinimumPaneSize(200)
+        # --- End Splitter ---
+
         self.select_all_button = wx.Button(main_panel, label="Select All")
         self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
         self.select_none_button = wx.Button(main_panel, label="Select None")
@@ -228,7 +232,8 @@ class MyFrame(wx.Frame):
         bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(middle, 1, wx.EXPAND | wx.ALL, 5)
+        # Replace the old middle sizer with the splitter window
+        main_sizer.Add(splitter, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
         main_panel.SetSizer(main_sizer)
         log_sizer = wx.BoxSizer(wx.VERTICAL)
