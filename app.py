@@ -77,9 +77,9 @@ class VideoInfoPanel(wx.Panel):
 
 class VideoList(wx.ListCtrl):
     COLS = [
-        ('Filename', 300),
-        ('Video', 100),
-        ('Audio', 100),
+        ('Filename', 500),
+        ('Video', 50),
+        ('Audio', 50),
         ('Res', 80),
         ('Size', 80),
     ]
@@ -164,7 +164,6 @@ class VideoList(wx.ListCtrl):
                     rel_path = str(v.relative_to(wd))
                     info_obj = info_cache.get(abs_path)
 
-                    # Default values
                     video_codec = audio_codec = res = size_str = ""
 
                     if info_obj:
@@ -243,7 +242,7 @@ class MyFrame(wx.Frame):
         splitter = wx.SplitterWindow(main_panel)
         self.vid_info_panel = VideoInfoPanel(splitter)
         self.listbox = VideoList(splitter, main_frame=self, vid_info_panel=self.vid_info_panel)
-        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=600)
+        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=760)
         splitter.SetMinimumPaneSize(200)
 
         self.select_all_button = wx.Button(main_panel, label="Select All")
@@ -480,7 +479,6 @@ class ReencodePane(wx.CollapsiblePane):
                 if p.stdout:
                     for line in p.stdout:
                         print(line, end='')
-                # No wx.Yield() in thread
 
         wx.CallAfter(self.total_progress.SetValue, 0)
         wx.CallAfter(self.total_progress.SetRange, len(video_list))
