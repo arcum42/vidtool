@@ -208,8 +208,8 @@ class MyFrame(wx.Frame):
         main_panel = wx.Panel(notebook)
         notebook.AddPage(main_panel, "Main")
 
-        log_panel = wx.Panel(notebook)
-        notebook.AddPage(log_panel, "Log")
+        settings_panel = SettingsPanel(notebook)
+        notebook.AddPage(settings_panel, "Settings")
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         top = wx.BoxSizer(wx.HORIZONTAL)
@@ -274,12 +274,6 @@ class MyFrame(wx.Frame):
         main_sizer.Add(splitter, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
         main_panel.SetSizer(main_sizer)
-
-        log_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.text = wx.TextCtrl(log_panel, style=wx.TE_MULTILINE)
-        self.text.SetValue("This is a text control.")
-        log_sizer.Add(self.text, 1, wx.EXPAND | wx.ALL, 5)
-        log_panel.SetSizer(log_sizer)
 
         sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 5)
         panel.SetSizer(sizer)
@@ -544,6 +538,73 @@ class ReencodePane(wx.CollapsiblePane):
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):
             wx.CallAfter(top_frame.listbox.refresh)
+
+class SettingsPanel(wx.Panel):
+    def __init__(self, parent):
+        global config
+        super().__init__(parent)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # ffmpeg
+        ffmpeg_box = wx.BoxSizer(wx.HORIZONTAL)
+        ffmpeg_label = wx.StaticText(self, label="ffmpeg binary:")
+        self.ffmpeg_path = wx.TextCtrl(self)
+        self.ffmpeg_path.SetValue(config.get("ffmpeg_bin", ""))
+        ffmpeg_browse = wx.Button(self, label="Browse")
+        ffmpeg_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffmpeg_path))
+        ffmpeg_box.Add(ffmpeg_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        ffmpeg_box.Add(self.ffmpeg_path, 1, wx.ALL | wx.EXPAND, 5)
+        ffmpeg_box.Add(ffmpeg_browse, 0, wx.ALL, 5)
+
+        # ffprobe
+        ffprobe_box = wx.BoxSizer(wx.HORIZONTAL)
+        ffprobe_label = wx.StaticText(self, label="ffprobe binary:")
+        self.ffprobe_path = wx.TextCtrl(self)
+        self.ffprobe_path.SetValue(config.get("ffprobe_bin", ""))
+        ffprobe_browse = wx.Button(self, label="Browse")
+        ffprobe_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffprobe_path))
+        ffprobe_box.Add(ffprobe_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        ffprobe_box.Add(self.ffprobe_path, 1, wx.ALL | wx.EXPAND, 5)
+        ffprobe_box.Add(ffprobe_browse, 0, wx.ALL, 5)
+
+        # ffplay
+        ffplay_box = wx.BoxSizer(wx.HORIZONTAL)
+        ffplay_label = wx.StaticText(self, label="ffplay binary:")
+        self.ffplay_path = wx.TextCtrl(self)
+        self.ffplay_path.SetValue(config.get("ffplay_bin", ""))
+        ffplay_browse = wx.Button(self, label="Browse")
+        ffplay_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffplay_path))
+        ffplay_box.Add(ffplay_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        ffplay_box.Add(self.ffplay_path, 1, wx.ALL | wx.EXPAND, 5)
+        ffplay_box.Add(ffplay_browse, 0, wx.ALL, 5)
+
+        # Save button
+        save_btn = wx.Button(self, label="Save Settings")
+        save_btn.Bind(wx.EVT_BUTTON, self.on_save)
+
+        sizer.Add(ffmpeg_box, 0, wx.EXPAND)
+        sizer.Add(ffprobe_box, 0, wx.EXPAND)
+        sizer.Add(ffplay_box, 0, wx.EXPAND)
+        sizer.Add(save_btn, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizer(sizer)
+
+    def on_browse(self, event, textbox):
+        dlg = wx.FileDialog(self, "Choose binary", wildcard="*", style=wx.FD_OPEN)
+        if dlg.ShowModal() == wx.ID_OK:
+            textbox.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
+    def on_save(self, event):
+        global config
+        config["ffmpeg_bin"] = self.ffmpeg_path.GetValue().strip()
+        config["ffprobe_bin"] = self.ffprobe_path.GetValue().strip()
+        config["ffplay_bin"] = self.ffplay_path.GetValue().strip()
+        # Update video module's binaries
+        import modules.video as video
+        video.ffmpeg_bin = config["ffmpeg_bin"] or "ffmpeg"
+        video.ffprobe_bin = config["ffprobe_bin"] or "ffprobe"
+        video.ffplay_bin = config["ffplay_bin"] or "ffplay"
+        wx.MessageBox("Settings saved!", "Info", wx.OK | wx.ICON_INFORMATION)
 
 class MyApp(wx.App):
     def OnInit(self):

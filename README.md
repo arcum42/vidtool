@@ -1,10 +1,33 @@
 # VidTool
 
-VidTool is a command line tool for video processing. It relies on ffmpeg and ffprobe, and makes it easy to batch run ffmpeg on files and do various common tasks.
+VidTool is a video processing tool with both a modern graphical user interface (GUI) and a command line interface (CLI). It relies on ffmpeg and ffprobe, making it easy to batch process video files, reencode, gather information, and perform common video management tasks.
 
-## Information
+## Features (GUI)
 
-Everything in this script is fairly subject to change, but the following is a list of features that are currently implemented:
+The GUI version (`app.py`) provides an intuitive interface for managing and processing video files. Key features include:
+
+- Browse and select directories containing video files
+- View detailed information about each video (resolution, codecs, streams, etc.)
+- Batch select and process multiple videos
+- Reencode videos with customizable options (codec, suffix, extension, CRF, etc.)
+- Play videos directly from the interface
+- Rename files to include resolution
+
+The GUI is built with wxPython. To use it, ensure you have `wxPython` installed:
+
+```
+pip install wxPython
+```
+
+Then run:
+
+```
+python app.py
+```
+
+## Command Line Tool
+
+VidTool also includes a command line tool (`vidtool.py`) for advanced users and scripting. The CLI supports batch reencoding, renaming, and information extraction.
 
 ```
 usage: vidtool [-h] {reencode,rename,info} ...
@@ -19,7 +42,26 @@ subcommands:
     reencode            Reencode a file/files with the extension specified, appending a suffix to the filename.
     rename              Rename a file (or all files in the current directory) to include video resolution.
     info                Get information about a video file.
+```
 
+See below for full CLI usage and options.
+
+## Installation
+
+VidTool does not require installation. Just make sure you have `ffmpeg` and `ffprobe` installed and available in your system path. For the GUI, you will also need `wxPython` (see above).
+
+To install all required Python dependencies, run:
+
+```
+pip install -r requirements.txt
+```
+
+---
+
+<details>
+<summary>Command Line Usage Details</summary>
+
+```
 usage: vidtool reencode [-h] [--av-copy-only] [--x265] [--vcodec [VCODEC]] [--acodec [ACODEC]] [--strip-video] [--strip-audio] [--strip-subs] [--strip-data]
                         [--custom-flags [CUSTOM_FLAGS ...]] [--batch] [--fix-resolution] [--fix-errors] [--force | --no-clobber]
                         pattern ext suffix
@@ -64,7 +106,6 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
   --batch     Batch rename all files in a directory.
-  ```
+```
 
-## Installation
-It currently doesn't need installation, as it relies only on system dependencies. Just make sure you have ffmpeg and ffprobe installed.
+</details>

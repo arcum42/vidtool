@@ -9,7 +9,7 @@ ffmpeg_bin = "ffmpeg"
 ffplay_bin = "ffplay"
 
 VIDEO_EXTENSIONS = (
-    ".mkv", ".mp4", ".webm", ".ogv", ".avi", ".mpg", ".mov", ".wmv", ".m4v", ".ogm", ".flv", ".divx", ".mpeg"
+    ".mkv", ".mp4", ".webm", ".ogv", ".avi", ".mpg", ".mov", ".wmv", ".m4v", ".ogm", ".flv", ".divx", ".mpeg", ".ts"
 )
 
 VIDEO_CODECS = (
