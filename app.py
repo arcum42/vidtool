@@ -270,7 +270,6 @@ class MyFrame(wx.Frame):
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Replace the old middle sizer with the splitter window
         main_sizer.Add(splitter, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
         main_panel.SetSizer(main_sizer)
@@ -309,7 +308,7 @@ class MyFrame(wx.Frame):
 
     def OnClose(self, event):
         global config, working_dir
-        # Save config from reencode_pane
+
         pane = self.reencode_pane
         config["output_extension"] = pane.extension_choice.GetStringSelection()
         config["output_suffix"] = pane.suffix_textbox.GetValue()
@@ -539,7 +538,7 @@ class ReencodePane(wx.CollapsiblePane):
             except Exception as e:
                 print(f"What-Ho? There was some sort of issue, I'm afraid... {e}")
         wx.CallAfter(self.reencode_button.Enable)
-        # Use wx.GetTopLevelParent(self) to access the frame and its listbox
+
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):
             wx.CallAfter(top_frame.listbox.refresh)
@@ -604,8 +603,7 @@ class SettingsPanel(wx.Panel):
         config["ffmpeg_bin"] = self.ffmpeg_path.GetValue().strip()
         config["ffprobe_bin"] = self.ffprobe_path.GetValue().strip()
         config["ffplay_bin"] = self.ffplay_path.GetValue().strip()
-        # Update video module's binaries
-        import modules.video as video
+
         video.ffmpeg_bin = config["ffmpeg_bin"] or "ffmpeg"
         video.ffprobe_bin = config["ffprobe_bin"] or "ffprobe"
         video.ffplay_bin = config["ffplay_bin"] or "ffplay"
