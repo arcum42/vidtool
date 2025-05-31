@@ -328,9 +328,7 @@ class MyFrame(wx.Frame):
 
     def OnPlay(self, event):
         print("Play button clicked")
-        import threading
         def play_videos():
-            import subprocess
             from modules.video import ffplay_bin
             for vid in video_list:
                 print(f"Playing: {vid}")
