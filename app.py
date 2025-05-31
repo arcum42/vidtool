@@ -328,7 +328,14 @@ class MyFrame(wx.Frame):
 
     def OnPlay(self, event):
         print("Play button clicked")
-        video.play(selected_video)
+        import threading
+        def play_videos():
+            import subprocess
+            from modules.video import ffplay_bin
+            for vid in video_list:
+                print(f"Playing: {vid}")
+                subprocess.run([ffplay_bin, str(vid)])
+        threading.Thread(target=play_videos, daemon=True).start()
         event.Skip(True)
 
     def OnSelectAll(self, event):
