@@ -9,13 +9,44 @@ import json
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 
-global video_list, selected_video, config, working_dir
 
-video_list = []
-config = {}
+class AppState:
+    """Central application state manager to replace global variables."""
+    
+    def __init__(self):
+        self.video_list = []
+        self.selected_video = None
+        self.config = {}
+        self.working_dir = None
+        self.main_frame = None  # Will be set to MyFrame instance
+        
+    def load_config(self):
+        """Load configuration from config.json file."""
+        config_file = pathlib.Path(__file__).parent / "config.json"
+        if config_file.exists():
+            try:
+                with open(config_file, "r") as f:
+                    self.config = json.load(f)
+                    print("Config loaded:", self.config)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Error loading config: {e}. Using default settings.")
+                self.config = {}
+        else:
+            print("Config file not found. Using default settings.")
+            
+    def save_config(self):
+        """Save configuration to config.json file."""
+        config_file = pathlib.Path(__file__).parent / "config.json"
+        try:
+            with open(config_file, "w") as f:
+                json.dump(self.config, f, indent=2)
+                print("Config saved:", self.config)
+        except IOError as e:
+            print(f"Error saving config: {e}")
 
-selected_video = None
-working_dir = None
+
+# Global app state instance
+app_state = AppState()
 
 class VideoInfoPanel(wx.Panel):
     LABELS = [
@@ -30,8 +61,9 @@ class VideoInfoPanel(wx.Panel):
         ("Data Streams:", "data_streams"),
     ]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app_state):
         super().__init__(parent, style=wx.RAISED_BORDER)
+        self.app_state = app_state
         self.scrollable_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
         self.scrollable_panel.SetScrollRate(5, 5)
         self.fields = {}
@@ -84,8 +116,9 @@ class VideoList(wx.ListCtrl):
         ('Size', 80),
     ]
 
-    def __init__(self, parent, main_frame=None, vid_info_panel=None):
+    def __init__(self, parent, app_state, main_frame=None, vid_info_panel=None):
         super().__init__(parent, style=wx.LC_REPORT | wx.SUNKEN_BORDER)
+        self.app_state = app_state
         self.main_frame = main_frame
         self.vid_info_panel = vid_info_panel
         self.info_cache = {}  # filename (str) -> video.info object
@@ -100,8 +133,6 @@ class VideoList(wx.ListCtrl):
         self.refresh()
 
     def OnSelected(self, event):
-        global selected_video, working_dir
-
         selection = self.GetFirstSelected()
         if selection == -1:
             if self.main_frame:
@@ -111,35 +142,32 @@ class VideoList(wx.ListCtrl):
         item = self.GetItemText(selection, 0)
         if self.main_frame:
             self.main_frame.SetStatusText(f"Selected: {item}")
-        selected_video = working_dir / item
+        self.app_state.selected_video = self.app_state.working_dir / item
 
-        info_obj = self.info_cache.get(str(selected_video))
+        info_obj = self.info_cache.get(str(self.app_state.selected_video))
         if not info_obj:
-            info_obj = video.info(selected_video)
-            self.info_cache[str(selected_video)] = info_obj
+            info_obj = video.info(self.app_state.selected_video)
+            self.info_cache[str(self.app_state.selected_video)] = info_obj
 
         if self.vid_info_panel:
             self.vid_info_panel.update_info(info_obj)
 
     def OnChecked(self, event):
-        global video_list, working_dir
-        video_list = [
-            str(working_dir / self.GetItemText(i, 0))
+        self.app_state.video_list = [
+            str(self.app_state.working_dir / self.GetItemText(i, 0))
             for i in range(self.GetItemCount()) if self.IsItemChecked(i)
         ]
 
     def refresh(self):
-        global video_list, working_dir
-
-        video_list = []
+        self.app_state.video_list = []
 
         self.DeleteAllItems()
         self.info_cache = {}
 
-        if not working_dir:
+        if not self.app_state.working_dir:
             return
 
-        wd = working_dir  # capture current working_dir for thread safety
+        wd = self.app_state.working_dir  # capture current working_dir for thread safety
         def scan_and_update():
             files = []
             info_cache = {}
@@ -153,9 +181,7 @@ class VideoList(wx.ListCtrl):
                         print(f"Failed to get info for {abs_path}: {e}")
 
             def update_ui():
-                global video_list
-
-                if working_dir != wd:
+                if self.app_state.working_dir != wd:
                     return
 
                 self.DeleteAllItems()
@@ -189,14 +215,14 @@ class VideoList(wx.ListCtrl):
                     self.SetItem(i, 4, size_str)
 
                 self.info_cache = info_cache
-                video_list = []
+                self.app_state.video_list = []
 
             wx.CallAfter(update_ui)
         threading.Thread(target=scan_and_update, daemon=True).start()
 
 class MyFrame(wx.Frame):
-    def __init__(self):
-        global config, working_dir
+    def __init__(self, app_state):
+        self.app_state = app_state
 
         super().__init__(parent=None, title="Vid Tool")
 
@@ -208,7 +234,7 @@ class MyFrame(wx.Frame):
         main_panel = wx.Panel(notebook)
         notebook.AddPage(main_panel, "Main")
 
-        settings_panel = SettingsPanel(notebook)
+        settings_panel = SettingsPanel(notebook, self.app_state)
         notebook.AddPage(settings_panel, "Settings")
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -216,10 +242,10 @@ class MyFrame(wx.Frame):
         play_size = wx.BoxSizer(wx.HORIZONTAL)
         bottom = wx.BoxSizer(wx.VERTICAL)
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
-        working_dir = pathlib.Path(config.get("working_dir", str(pathlib.Path.cwd())))
+        self.app_state.working_dir = pathlib.Path(self.app_state.config.get("working_dir", str(pathlib.Path.cwd())))
 
         self.working_dir_box = wx.TextCtrl(main_panel)
-        self.working_dir_box.SetValue(str(working_dir))
+        self.working_dir_box.SetValue(str(self.app_state.working_dir))
 
         self.button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON))
         self.button.SetDefault()
@@ -240,8 +266,8 @@ class MyFrame(wx.Frame):
 
         # --- Splitter Window for Video List and Info ---
         splitter = wx.SplitterWindow(main_panel)
-        self.vid_info_panel = VideoInfoPanel(splitter)
-        self.listbox = VideoList(splitter, main_frame=self, vid_info_panel=self.vid_info_panel)
+        self.vid_info_panel = VideoInfoPanel(splitter, self.app_state)
+        self.listbox = VideoList(splitter, self.app_state, main_frame=self, vid_info_panel=self.vid_info_panel)
         splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=760)
         splitter.SetMinimumPaneSize(200)
 
@@ -255,7 +281,7 @@ class MyFrame(wx.Frame):
         self.play_button = wx.Button(main_panel, label="Play")
         self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
 
-        self.reencode_pane = ReencodePane(main_panel)
+        self.reencode_pane = ReencodePane(main_panel, self.app_state)
         self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
         self.reencode_pane.Expand()
         self.reencode_pane.Layout()
@@ -284,14 +310,13 @@ class MyFrame(wx.Frame):
         self.Show()
 
     def OnChangeDir(self, event):
-        global config, working_dir
-        dlg = wx.DirDialog(self, "Choose a directory:", str(working_dir), wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,)
+        dlg = wx.DirDialog(self, "Choose a directory:", str(self.app_state.working_dir), wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,)
         if dlg.ShowModal() == wx.ID_OK:
-            working_dir = pathlib.Path(dlg.GetPath()).resolve()
-            self.working_dir_box.SetValue(str(working_dir))
-            self.SetStatusText(f"Working directory: {str(working_dir)}")
+            self.app_state.working_dir = pathlib.Path(dlg.GetPath()).resolve()
+            self.working_dir_box.SetValue(str(self.app_state.working_dir))
+            self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
             self.listbox.refresh()
-            config["working_dir"] = str(working_dir)
+            self.app_state.config["working_dir"] = str(self.app_state.working_dir)
         dlg.Destroy()
 
     def OnRefresh(self, event):
@@ -299,37 +324,34 @@ class MyFrame(wx.Frame):
         self.SetStatusText("File list refreshed.")
 
     def OnGoUp(self, event):
-        global working_dir
-        if working_dir is not None:
-            working_dir = working_dir.parent
-            self.working_dir_box.SetValue(str(working_dir))
-            self.SetStatusText(f"Working directory: {str(working_dir)}")
+        if self.app_state.working_dir is not None:
+            self.app_state.working_dir = self.app_state.working_dir.parent
+            self.working_dir_box.SetValue(str(self.app_state.working_dir))
+            self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
             self.listbox.refresh()
 
     def OnClose(self, event):
-        global config, working_dir
-
         pane = self.reencode_pane
-        config["output_extension"] = pane.extension_choice.GetStringSelection()
-        config["output_suffix"] = pane.suffix_textbox.GetValue()
-        config["append_res"] = pane.append_res_checkbox.GetValue()
-        config["encode_video"] = pane.vcodec_checkbox.GetValue()
-        config["video_codec"] = pane.vcodec_choice.GetStringSelection()
-        config["encode_audio"] = pane.acodec_checkbox.GetValue()
-        config["audio_codec"] = pane.acodec_choice.GetStringSelection()
-        config["no_data"] = pane.exclude_data_streams.GetValue()
-        config["fix_resolution"] = pane.fix_res.GetValue()
-        config["fix_err"] = pane.fix_errors.GetValue()
-        config["use_crf"] = pane.crf_checkbox.GetValue()
-        config["crf_value"] = str(pane.crf_int.GetValue())
-        config["working_dir"] = str(working_dir) if working_dir else str(pathlib.Path.cwd())
+        self.app_state.config["output_extension"] = pane.extension_choice.GetStringSelection()
+        self.app_state.config["output_suffix"] = pane.suffix_textbox.GetValue()
+        self.app_state.config["append_res"] = pane.append_res_checkbox.GetValue()
+        self.app_state.config["encode_video"] = pane.vcodec_checkbox.GetValue()
+        self.app_state.config["video_codec"] = pane.vcodec_choice.GetStringSelection()
+        self.app_state.config["encode_audio"] = pane.acodec_checkbox.GetValue()
+        self.app_state.config["audio_codec"] = pane.acodec_choice.GetStringSelection()
+        self.app_state.config["no_data"] = pane.exclude_data_streams.GetValue()
+        self.app_state.config["fix_resolution"] = pane.fix_res.GetValue()
+        self.app_state.config["fix_err"] = pane.fix_errors.GetValue()
+        self.app_state.config["use_crf"] = pane.crf_checkbox.GetValue()
+        self.app_state.config["crf_value"] = str(pane.crf_int.GetValue())
+        self.app_state.config["working_dir"] = str(self.app_state.working_dir) if self.app_state.working_dir else str(pathlib.Path.cwd())
         self.Destroy()
 
     def OnPlay(self, event):
         print("Play button clicked")
         def play_videos():
             from modules.video import ffplay_bin
-            for vid in video_list:
+            for vid in self.app_state.video_list:
                 print(f"Playing: {vid}")
                 subprocess.run([ffplay_bin, str(vid)])
         threading.Thread(target=play_videos, daemon=True).start()
@@ -346,8 +368,8 @@ class MyFrame(wx.Frame):
         self.listbox.OnChecked(event)
 
 class ReencodePane(wx.CollapsiblePane):
-    def __init__(self, parent):
-        global config
+    def __init__(self, parent, app_state):
+        self.app_state = app_state
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
 
         panel = self.GetPane()
@@ -357,18 +379,18 @@ class ReencodePane(wx.CollapsiblePane):
         self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
 
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
-        self.vcodec_checkbox.SetValue(config.get("encode_video", False))
+        self.vcodec_checkbox.SetValue(self.app_state.config.get("encode_video", False))
         self.vcodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_CODECS))
-        vcodec_default = config.get("video_codec", "libx265")
+        vcodec_default = self.app_state.config.get("video_codec", "libx265")
         if vcodec_default not in VIDEO_CODECS:
             print(f"Warning: {vcodec_default} is not a valid video codec. Using default.")
             vcodec_default = "libx265"
         self.vcodec_choice.SetSelection(VIDEO_CODECS.index(vcodec_default))
 
         self.acodec_checkbox = wx.CheckBox(panel, label="Audio Codec:")
-        self.acodec_checkbox.SetValue(config.get("encode_audio", False))
+        self.acodec_checkbox.SetValue(self.app_state.config.get("encode_audio", False))
         self.acodec_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(AUDIO_CODECS))
-        acodec_default = config.get("audio_codec", "aac")
+        acodec_default = self.app_state.config.get("audio_codec", "aac")
 
         if acodec_default not in AUDIO_CODECS:
             print(f"Warning: {acodec_default} is not a valid audio codec. Using default.")
@@ -377,14 +399,14 @@ class ReencodePane(wx.CollapsiblePane):
 
         self.suffix_label = wx.StaticText(panel, label="Suffix:")
         self.suffix_textbox = wx.TextCtrl(panel)
-        self.suffix_textbox.SetValue(config.get("output_suffix", "_copy"))
+        self.suffix_textbox.SetValue(self.app_state.config.get("output_suffix", "_copy"))
 
         self.append_res_checkbox = wx.CheckBox(panel, label="Append Resolution")
-        self.append_res_checkbox.SetValue(config.get("append_res", False))
+        self.append_res_checkbox.SetValue(self.app_state.config.get("append_res", False))
 
         self.extension_label = wx.StaticText(panel, label="Extension:")
         self.extension_choice = wx.ComboBox(panel, size = [-1, -1], choices=list(VIDEO_EXTENSIONS))
-        extension_default = config.get("output_extension", ".mkv")
+        extension_default = self.app_state.config.get("output_extension", ".mkv")
 
         if extension_default not in VIDEO_EXTENSIONS:
             print(f"Warning: {extension_default} is not a valid video extension. Using default.")
@@ -394,19 +416,19 @@ class ReencodePane(wx.CollapsiblePane):
         self.sub_label = wx.StaticText(panel, label="Subtitles:")
         sub_list = ["None", "First", "All", "srt"]
         self.sub_choice = wx.ComboBox(panel, size = [-1, -1], choices=sub_list)
-        self.sub_choice.SetSelection(sub_list.index(config.get("subtitles", "First")))
+        self.sub_choice.SetSelection(sub_list.index(self.app_state.config.get("subtitles", "First")))
         
         self.exclude_data_streams = wx.CheckBox(panel, label="No Data")
-        self.exclude_data_streams.SetValue(config.get("no_data", False))
+        self.exclude_data_streams.SetValue(self.app_state.config.get("no_data", False))
         self.fix_res = wx.CheckBox(panel, label="Fix Resolution")
-        self.fix_res.SetValue(config.get("fix_resolution", False))
+        self.fix_res.SetValue(self.app_state.config.get("fix_resolution", False))
         self.fix_errors = wx.CheckBox(panel, label="Fix Errors")
-        self.fix_errors.SetValue(config.get("fix_err", False))
+        self.fix_errors.SetValue(self.app_state.config.get("fix_err", False))
 
         self.crf_checkbox = wx.CheckBox(panel, label="CRF:")
-        self.crf_checkbox.SetValue(config.get("use_crf", False))
+        self.crf_checkbox.SetValue(self.app_state.config.get("use_crf", False))
         self.crf_int = wx.SpinCtrl(panel, size = [-1, -1], initial = 28, min = 4, max = 63)
-        self.crf_int.SetValue(config.get("crf_value", 28))
+        self.crf_int.SetValue(self.app_state.config.get("crf_value", 28))
 
         self.reencode_button = wx.Button(panel, label="Reencode")
         self.reencode_button.Bind(wx.EVT_BUTTON, self.OnReencode)
@@ -479,9 +501,9 @@ class ReencodePane(wx.CollapsiblePane):
                         print(line, end='')
 
         wx.CallAfter(self.total_progress.SetValue, 0)
-        wx.CallAfter(self.total_progress.SetRange, len(video_list))
+        wx.CallAfter(self.total_progress.SetRange, len(self.app_state.video_list))
         progress = 0
-        for video_file in video_list:
+        for video_file in self.app_state.video_list:
             if not video_file:
                 continue
             print(f"Encoding video_file: {video_file}")
@@ -544,8 +566,8 @@ class ReencodePane(wx.CollapsiblePane):
             wx.CallAfter(top_frame.listbox.refresh)
 
 class SettingsPanel(wx.Panel):
-    def __init__(self, parent):
-        global config
+    def __init__(self, parent, app_state):
+        self.app_state = app_state
         super().__init__(parent)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -553,7 +575,7 @@ class SettingsPanel(wx.Panel):
         ffmpeg_box = wx.BoxSizer(wx.HORIZONTAL)
         ffmpeg_label = wx.StaticText(self, label="ffmpeg binary:")
         self.ffmpeg_path = wx.TextCtrl(self)
-        self.ffmpeg_path.SetValue(config.get("ffmpeg_bin", ""))
+        self.ffmpeg_path.SetValue(self.app_state.config.get("ffmpeg_bin", ""))
         ffmpeg_browse = wx.Button(self, label="Browse")
         ffmpeg_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffmpeg_path))
         ffmpeg_box.Add(ffmpeg_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
@@ -564,7 +586,7 @@ class SettingsPanel(wx.Panel):
         ffprobe_box = wx.BoxSizer(wx.HORIZONTAL)
         ffprobe_label = wx.StaticText(self, label="ffprobe binary:")
         self.ffprobe_path = wx.TextCtrl(self)
-        self.ffprobe_path.SetValue(config.get("ffprobe_bin", ""))
+        self.ffprobe_path.SetValue(self.app_state.config.get("ffprobe_bin", ""))
         ffprobe_browse = wx.Button(self, label="Browse")
         ffprobe_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffprobe_path))
         ffprobe_box.Add(ffprobe_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
@@ -575,7 +597,7 @@ class SettingsPanel(wx.Panel):
         ffplay_box = wx.BoxSizer(wx.HORIZONTAL)
         ffplay_label = wx.StaticText(self, label="ffplay binary:")
         self.ffplay_path = wx.TextCtrl(self)
-        self.ffplay_path.SetValue(config.get("ffplay_bin", ""))
+        self.ffplay_path.SetValue(self.app_state.config.get("ffplay_bin", ""))
         ffplay_browse = wx.Button(self, label="Browse")
         ffplay_browse.Bind(wx.EVT_BUTTON, lambda evt: self.on_browse(evt, self.ffplay_path))
         ffplay_box.Add(ffplay_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
@@ -599,42 +621,29 @@ class SettingsPanel(wx.Panel):
         dlg.Destroy()
 
     def on_save(self, event):
-        global config
-        config["ffmpeg_bin"] = self.ffmpeg_path.GetValue().strip()
-        config["ffprobe_bin"] = self.ffprobe_path.GetValue().strip()
-        config["ffplay_bin"] = self.ffplay_path.GetValue().strip()
+        self.app_state.config["ffmpeg_bin"] = self.ffmpeg_path.GetValue().strip()
+        self.app_state.config["ffprobe_bin"] = self.ffprobe_path.GetValue().strip()
+        self.app_state.config["ffplay_bin"] = self.ffplay_path.GetValue().strip()
 
-        video.ffmpeg_bin = config["ffmpeg_bin"] or "ffmpeg"
-        video.ffprobe_bin = config["ffprobe_bin"] or "ffprobe"
-        video.ffplay_bin = config["ffplay_bin"] or "ffplay"
+        video.ffmpeg_bin = self.app_state.config["ffmpeg_bin"] or "ffmpeg"
+        video.ffprobe_bin = self.app_state.config["ffprobe_bin"] or "ffprobe"
+        video.ffplay_bin = self.app_state.config["ffplay_bin"] or "ffplay"
         wx.MessageBox("Settings saved!", "Info", wx.OK | wx.ICON_INFORMATION)
 
 class MyApp(wx.App):
     def OnInit(self):
-        global config, main_frame
+        # Initialize app state and load config
+        app_state.load_config()
         
-        # Load the config file from json
-        config_file = pathlib.Path(__file__).parent / "config.json"
-        if config_file.exists():
-            with open(config_file, "r") as f:
-                config = json.load(f)
-                print("Config loaded:", config)
-        else:
-            print("Config file not found. Using default settings.")
-
-        main_frame = MyFrame()
-        main_frame.Show(True)
-        main_frame.Centre()
+        self.main_frame = MyFrame(app_state)
+        app_state.main_frame = self.main_frame
+        self.main_frame.Show(True)
+        self.main_frame.Centre()
         return True
 
     def OnExit(self):
-        global config
-        
         # Save the config file to json
-        config_file = pathlib.Path(__file__).parent / "config.json"
-        with open(config_file, "w") as f:
-            json.dump(config, f)
-            print("Config saved:", config)
+        app_state.save_config()
         return True
 
 if __name__ == "__main__":
