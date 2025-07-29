@@ -5,20 +5,22 @@ import pathlib
 import threading
 import subprocess
 import json
+from typing import Optional, List, Dict, Any
 
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
+from modules.video import VideoProcessingError, FFmpegNotFoundError, VideoFileError
 
 
 class AppState:
     """Central application state manager to replace global variables."""
     
     def __init__(self):
-        self.video_list = []
-        self.selected_video = None
-        self.config = {}
-        self.working_dir = None
-        self.main_frame = None  # Will be set to MyFrame instance
+        self.video_list: List[str] = []
+        self.selected_video: Optional[pathlib.Path] = None
+        self.config: Dict[str, Any] = {}
+        self.working_dir: Optional[pathlib.Path] = None
+        self.main_frame: Any = None  # Will be set to MyFrame instance (avoid typing conflicts)
         
     def load_config(self):
         """Load configuration from config.json file."""
@@ -146,10 +148,23 @@ class VideoList(wx.ListCtrl):
 
         info_obj = self.info_cache.get(str(self.app_state.selected_video))
         if not info_obj:
-            info_obj = video.info(self.app_state.selected_video)
-            self.info_cache[str(self.app_state.selected_video)] = info_obj
+            try:
+                info_obj = video.info(self.app_state.selected_video)
+                self.info_cache[str(self.app_state.selected_video)] = info_obj
+            except (VideoProcessingError, FFmpegNotFoundError, VideoFileError) as e:
+                if self.main_frame:
+                    self.main_frame.SetStatusText(f"Error loading video info: {e}")
+                wx.MessageBox(f"Error loading video information:\n\n{e}", 
+                             "Video Processing Error", wx.OK | wx.ICON_ERROR)
+                return
+            except Exception as e:
+                if self.main_frame:
+                    self.main_frame.SetStatusText(f"Unexpected error: {e}")
+                wx.MessageBox(f"Unexpected error loading video:\n\n{e}", 
+                             "Unexpected Error", wx.OK | wx.ICON_ERROR)
+                return
 
-        if self.vid_info_panel:
+        if self.vid_info_panel and info_obj:
             self.vid_info_panel.update_info(info_obj)
 
     def OnChecked(self, event):
@@ -171,14 +186,28 @@ class VideoList(wx.ListCtrl):
         def scan_and_update():
             files = []
             info_cache = {}
+            errors = []
+            
+            try:
+                # Check FFmpeg availability once at the start
+                video.check_ffmpeg_availability()
+            except FFmpegNotFoundError as e:
+                wx.CallAfter(lambda: wx.MessageBox(f"FFmpeg Error:\n\n{e}", 
+                                                  "FFmpeg Not Found", wx.OK | wx.ICON_ERROR))
+                return
+            
             for p in sorted(pathlib.Path(wd).glob("**/*")):
                 if p.suffix in VIDEO_EXTENSIONS:
                     abs_path = str(p.resolve())
                     files.append(p.resolve())
                     try:
                         info_cache[abs_path] = video.info(abs_path)
-                    except Exception as e:
+                    except (VideoProcessingError, VideoFileError) as e:
+                        errors.append(f"{p.name}: {e}")
                         print(f"Failed to get info for {abs_path}: {e}")
+                    except Exception as e:
+                        errors.append(f"{p.name}: Unexpected error - {e}")
+                        print(f"Unexpected error processing {abs_path}: {e}")
 
             def update_ui():
                 if self.app_state.working_dir != wd:
@@ -207,6 +236,9 @@ class VideoList(wx.ListCtrl):
                             size_str = f"{info_obj.size_mb:.2f} MB"
                         else:
                             size_str = f"{info_obj.size_gb:.2f} GB"
+                    else:
+                        # Mark files that failed to process
+                        video_codec = "ERROR"
 
                     self.InsertItem(i, rel_path)
                     self.SetItem(i, 1, video_codec)
@@ -216,6 +248,19 @@ class VideoList(wx.ListCtrl):
 
                 self.info_cache = info_cache
                 self.app_state.video_list = []
+                
+                # Show error summary if there were issues
+                if errors and self.main_frame:
+                    error_count = len(errors)
+                    status_msg = f"Loaded {len(files)} files ({error_count} errors)"
+                    self.main_frame.SetStatusText(status_msg)
+                    
+                    if error_count <= 5:  # Show details for few errors
+                        error_msg = f"Errors processing {error_count} files:\n\n" + "\n".join(errors)
+                    else:  # Summarize for many errors
+                        error_msg = f"Errors processing {error_count} files. First 5:\n\n" + "\n".join(errors[:5]) + f"\n\n... and {error_count - 5} more"
+                    
+                    wx.CallAfter(lambda: wx.MessageBox(error_msg, "Video Processing Errors", wx.OK | wx.ICON_WARNING))
 
             wx.CallAfter(update_ui)
         threading.Thread(target=scan_and_update, daemon=True).start()
@@ -349,11 +394,33 @@ class MyFrame(wx.Frame):
 
     def OnPlay(self, event):
         print("Play button clicked")
+        
+        if not self.app_state.video_list:
+            wx.MessageBox("No videos selected for playback.", "No Selection", wx.OK | wx.ICON_INFORMATION)
+            return
+            
         def play_videos():
-            from modules.video import ffplay_bin
+            try:
+                # Check FFmpeg availability
+                video.check_ffmpeg_availability()
+            except FFmpegNotFoundError as e:
+                wx.CallAfter(lambda: wx.MessageBox(f"Cannot play videos:\n\n{e}", 
+                                                  "FFmpeg Not Found", wx.OK | wx.ICON_ERROR))
+                return
+                
             for vid in self.app_state.video_list:
-                print(f"Playing: {vid}")
-                subprocess.run([ffplay_bin, str(vid)])
+                try:
+                    print(f"Playing: {vid}")
+                    video.play(vid)
+                except (VideoProcessingError, VideoFileError) as e:
+                    wx.CallAfter(lambda v=vid, err=e: wx.MessageBox(f"Error playing {pathlib.Path(v).name}:\n\n{err}", 
+                                                                   "Playback Error", wx.OK | wx.ICON_ERROR))
+                    continue
+                except Exception as e:
+                    wx.CallAfter(lambda v=vid, err=e: wx.MessageBox(f"Unexpected error playing {pathlib.Path(v).name}:\n\n{err}", 
+                                                                   "Unexpected Error", wx.OK | wx.ICON_ERROR))
+                    continue
+                    
         threading.Thread(target=play_videos, daemon=True).start()
         event.Skip(True)
 
@@ -493,20 +560,37 @@ class ReencodePane(wx.CollapsiblePane):
         threading.Thread(target=self.ReEncodeWorker, args=(options,), daemon=True).start()
 
     def ReEncodeWorker(self, options):
-        def do_execute(cmd):
-            print(subprocess.list2cmdline(cmd))
-            with subprocess.Popen(cmd, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
-                if p.stdout:
-                    for line in p.stdout:
-                        print(line, end='')
+        """Worker thread for reencoding with comprehensive error handling."""
+        
+        # Check prerequisites first
+        try:
+            video.check_ffmpeg_availability()
+        except FFmpegNotFoundError as e:
+            wx.CallAfter(lambda: wx.MessageBox(f"Cannot start encoding:\n\n{e}", 
+                                              "FFmpeg Not Found", wx.OK | wx.ICON_ERROR))
+            wx.CallAfter(self.reencode_button.Enable)
+            return
+            
+        if not self.app_state.video_list:
+            wx.CallAfter(lambda: wx.MessageBox("No videos selected for encoding.", 
+                                              "No Selection", wx.OK | wx.ICON_INFORMATION))
+            wx.CallAfter(self.reencode_button.Enable)
+            return
 
         wx.CallAfter(self.total_progress.SetValue, 0)
         wx.CallAfter(self.total_progress.SetRange, len(self.app_state.video_list))
+        
         progress = 0
+        successful = 0
+        errors = []
+        
         for video_file in self.app_state.video_list:
             if not video_file:
                 continue
+                
+            video_name = pathlib.Path(video_file).name
             print(f"Encoding video_file: {video_file}")
+            
             try:
                 info = video.info(video_file)
                 output_suffix = options["output_suffix"]
@@ -515,16 +599,26 @@ class ReencodePane(wx.CollapsiblePane):
                     res_width = info.max_width
                     res_height = info.max_height
                     if options["fix_resolution"]:
-                        res_width = (res_width / 2) * 2
-                        res_height = (res_height / 2) * 2
-                    output_suffix = f"{output_suffix}_{res_width}x{res_height}"
+                        res_width = (res_width // 2) * 2  # Use integer division
+                        res_height = (res_height // 2) * 2
+                    output_suffix = f"{output_suffix}_{int(res_width)}x{int(res_height)}"
 
                 if output_suffix and not output_suffix.startswith("_"):
                     output_suffix = f"_{output_suffix}"
+                    
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
                 encode_job.add_output_from_input(file_append=output_suffix, file_extension=options["output_extension"])
 
+                # Check if output file already exists
+                if pathlib.Path(encode_job.output).exists():
+                    print(f"Output file '{encode_job.output}' already exists. Skipping.")
+                    errors.append(f"{video_name}: Output file already exists")
+                    progress += 1
+                    wx.CallAfter(self.total_progress.SetValue, progress)
+                    continue
+
+                # Configure encoding options
                 if options["encode_video"]:
                     encode_job.set_video_codec(options["video_codec"])
                 if options["encode_audio"]:
@@ -542,6 +636,7 @@ class ReencodePane(wx.CollapsiblePane):
                         encode_job.add_input(str(srt_file))
                     else:
                         print(f"Warning: {srt_file} does not exist. Skipping.")
+                        
                 if options["no_data"]:
                     encode_job.exclude_data()
                 if options["fix_resolution"]:
@@ -550,15 +645,41 @@ class ReencodePane(wx.CollapsiblePane):
                     encode_job.fix_errors()
                 if options["use_crf"]:
                     encode_job.set_crf(options["crf_value"])
-                if pathlib.Path(encode_job.output).exists():
-                    print(f"Output file '{encode_job.output}' already exists. Skipping.")
-                    continue
 
-                do_execute(encode_job.reencode_str())
+                # Perform the encoding
+                encode_job.reencode()
+                successful += 1
+                
+            except (VideoProcessingError, FFmpegNotFoundError, VideoFileError) as e:
+                error_msg = f"{video_name}: {e}"
+                errors.append(error_msg)
+                print(f"Video processing error: {error_msg}")
+                
+            except Exception as e:
+                error_msg = f"{video_name}: Unexpected error - {e}"
+                errors.append(error_msg)
+                print(f"Unexpected error: {error_msg}")
+            
+            finally:
                 progress += 1
                 wx.CallAfter(self.total_progress.SetValue, progress)
-            except Exception as e:
-                print(f"What-Ho? There was some sort of issue, I'm afraid... {e}")
+
+        # Show completion summary
+        total_files = len(self.app_state.video_list)
+        failed = len(errors)
+        
+        if errors:
+            if failed <= 5:
+                error_details = "\n".join(errors)
+            else:
+                error_details = "\n".join(errors[:5]) + f"\n... and {failed - 5} more errors"
+                
+            summary = f"Encoding completed:\n\n✓ {successful} successful\n✗ {failed} failed\n\nErrors:\n{error_details}"
+            wx.CallAfter(lambda: wx.MessageBox(summary, "Encoding Complete", wx.OK | wx.ICON_WARNING))
+        else:
+            wx.CallAfter(lambda: wx.MessageBox(f"All {successful} files encoded successfully!", 
+                                              "Encoding Complete", wx.OK | wx.ICON_INFORMATION))
+        
         wx.CallAfter(self.reencode_button.Enable)
 
         top_frame = wx.GetTopLevelParent(self)
@@ -621,14 +742,42 @@ class SettingsPanel(wx.Panel):
         dlg.Destroy()
 
     def on_save(self, event):
-        self.app_state.config["ffmpeg_bin"] = self.ffmpeg_path.GetValue().strip()
-        self.app_state.config["ffprobe_bin"] = self.ffprobe_path.GetValue().strip()
-        self.app_state.config["ffplay_bin"] = self.ffplay_path.GetValue().strip()
+        """Save settings with validation."""
+        ffmpeg_path = self.ffmpeg_path.GetValue().strip()
+        ffprobe_path = self.ffprobe_path.GetValue().strip()
+        ffplay_path = self.ffplay_path.GetValue().strip()
+        
+        # Validate paths if provided
+        invalid_paths = []
+        for name, path in [("ffmpeg", ffmpeg_path), ("ffprobe", ffprobe_path), ("ffplay", ffplay_path)]:
+            if path and not pathlib.Path(path).exists():
+                invalid_paths.append(f"{name}: {path}")
+        
+        if invalid_paths:
+            wx.MessageBox(f"Invalid paths found:\n\n" + "\n".join(invalid_paths) + 
+                         "\n\nSettings not saved. Please check the paths.", 
+                         "Invalid Paths", wx.OK | wx.ICON_ERROR)
+            return
+        
+        # Save to config
+        self.app_state.config["ffmpeg_bin"] = ffmpeg_path
+        self.app_state.config["ffprobe_bin"] = ffprobe_path
+        self.app_state.config["ffplay_bin"] = ffplay_path
 
-        video.ffmpeg_bin = self.app_state.config["ffmpeg_bin"] or "ffmpeg"
-        video.ffprobe_bin = self.app_state.config["ffprobe_bin"] or "ffprobe"
-        video.ffplay_bin = self.app_state.config["ffplay_bin"] or "ffplay"
-        wx.MessageBox("Settings saved!", "Info", wx.OK | wx.ICON_INFORMATION)
+        # Update module-level variables
+        video.ffmpeg_bin = ffmpeg_path or "ffmpeg"
+        video.ffprobe_bin = ffprobe_path or "ffprobe"
+        video.ffplay_bin = ffplay_path or "ffplay"
+        
+        # Test FFmpeg availability with new settings
+        try:
+            video.check_ffmpeg_availability()
+            wx.MessageBox("Settings saved and FFmpeg tools verified successfully!", 
+                         "Settings Saved", wx.OK | wx.ICON_INFORMATION)
+        except FFmpegNotFoundError as e:
+            wx.MessageBox(f"Settings saved, but FFmpeg tools not found:\n\n{e}\n\n" +
+                         "Please ensure FFmpeg is installed or provide correct paths.", 
+                         "Settings Saved - Warning", wx.OK | wx.ICON_WARNING)
 
 class MyApp(wx.App):
     def OnInit(self):
