@@ -5,6 +5,7 @@ import pathlib
 import threading
 import subprocess
 import json
+import time
 from typing import Optional, List, Dict, Any
 
 import modules.video as video
@@ -63,26 +64,36 @@ class VideoInfoPanel(wx.Panel):
         ("Data Streams:", "data_streams"),
     ]
 
-    def __init__(self, parent, app_state):
-        super().__init__(parent, style=wx.RAISED_BORDER)
+    def __init__(self, parent, app_state: AppState):
+        super().__init__(parent)
         self.app_state = app_state
-        self.scrollable_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
-        self.scrollable_panel.SetScrollRate(5, 5)
         self.fields = {}
-        sizer = wx.FlexGridSizer(cols=2, vgap=5, hgap=5)
+        self.InitUI()
 
-        for label, attr in self.LABELS:
-            lbl = wx.StaticText(self.scrollable_panel, label=label)
-            txt = wx.TextCtrl(self.scrollable_panel, style=wx.TE_READONLY)
-            self.fields[attr] = txt
-            sizer.Add(lbl, 0, wx.ALIGN_CENTER_VERTICAL)
-            sizer.Add(txt, 1, wx.EXPAND)
-
-        sizer.AddGrowableCol(1, 1)
-        self.scrollable_panel.SetSizer(sizer)
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.Add(self.scrollable_panel, 1, wx.EXPAND)
-        self.SetSizer(main_sizer)
+    def InitUI(self):
+        """Initialize the UI elements for video information display."""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        for label_text, field_key in self.LABELS:
+            row_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            label = wx.StaticText(self, label=label_text)
+            label.SetMinSize((120, -1))
+            
+            if field_key in ["video_streams", "audio_streams", "subtitle_streams", "data_streams"]:
+                # Use multiline text for stream info
+                field = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+                field.SetMinSize((-1, 60))
+            else:
+                # Use single line text for basic info
+                field = wx.TextCtrl(self, style=wx.TE_READONLY)
+            
+            self.fields[field_key] = field
+            
+            row_sizer.Add(label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+            row_sizer.Add(field, 1, wx.ALL | wx.EXPAND, 5)
+            sizer.Add(row_sizer, 0, wx.EXPAND)
+        
+        self.SetSizer(sizer)
 
     def update_info(self, info):
         self.fields["filename"].SetValue(pathlib.Path(info.filename).name)
@@ -437,6 +448,10 @@ class MyFrame(wx.Frame):
 class ReencodePane(wx.CollapsiblePane):
     def __init__(self, parent, app_state):
         self.app_state = app_state
+        self.cancel_event = threading.Event()
+        self.current_encode_job = None
+        self.current_file_name = ""
+        self.encoding_start_time = 0
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
 
         panel = self.GetPane()
@@ -499,9 +514,19 @@ class ReencodePane(wx.CollapsiblePane):
 
         self.reencode_button = wx.Button(panel, label="Reencode")
         self.reencode_button.Bind(wx.EVT_BUTTON, self.OnReencode)
+        
+        self.cancel_button = wx.Button(panel, label="Cancel")
+        self.cancel_button.Bind(wx.EVT_BUTTON, self.OnCancel)
+        self.cancel_button.Enable(False)
 
         self.total_label = wx.StaticText(panel, label="Total Progress:")
         self.total_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        
+        self.current_file_label = wx.StaticText(panel, label="Current File:")
+        self.current_file_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        
+        self.progress_details = wx.StaticText(panel, label="")
+        self.time_estimate = wx.StaticText(panel, label="")
 
         re_hsizer1.Add(self.vcodec_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer1.Add(self.vcodec_choice, 0, wx.ALL | wx.EXPAND, 5)
@@ -522,12 +547,19 @@ class ReencodePane(wx.CollapsiblePane):
         re_hsizer2.Add(self.extension_label, 0, wx.ALL | wx.ALIGN_CENTER, 0)
         re_hsizer2.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
         
-        re_hsizer2.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 10)
+        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        button_sizer.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 5)
+        button_sizer.Add(self.cancel_button, 0, wx.ALL | wx.EXPAND, 5)
+        re_hsizer2.Add(button_sizer, 0, wx.ALL | wx.EXPAND, 5)
         
         re_vsizer.Add(re_hsizer1, 0, wx.ALL | wx.EXPAND, 0)
         re_vsizer.Add(re_hsizer2, 0, wx.ALL | wx.EXPAND, 0)
         re_vsizer.Add(self.total_label, 0, wx.ALL, 5)
         re_vsizer.Add(self.total_progress, 0, wx.EXPAND | wx.ALL, 5)
+        re_vsizer.Add(self.current_file_label, 0, wx.ALL, 5)
+        re_vsizer.Add(self.current_file_progress, 0, wx.EXPAND | wx.ALL, 5)
+        re_vsizer.Add(self.progress_details, 0, wx.ALL, 5)
+        re_vsizer.Add(self.time_estimate, 0, wx.ALL, 5)
 
         panel.SetSizer(re_vsizer)
 
@@ -541,6 +573,15 @@ class ReencodePane(wx.CollapsiblePane):
     def OnReencode(self, event):
         print("Reencode button clicked")
         self.reencode_button.Disable()
+        self.cancel_button.Enable()
+        self.cancel_event.clear()
+        
+        # Reset progress displays
+        self.current_file_progress.SetValue(0)
+        self.progress_details.SetLabel("")
+        self.time_estimate.SetLabel("")
+        self.encoding_start_time = time.time()
+        
         options = {}
         options["output_extension"] = self.extension_choice.GetStringSelection()
         options["output_suffix"] = self.suffix_textbox.GetValue()
@@ -558,6 +599,36 @@ class ReencodePane(wx.CollapsiblePane):
 
         # Start reencoding in a background thread
         threading.Thread(target=self.ReEncodeWorker, args=(options,), daemon=True).start()
+
+    def OnCancel(self, event):
+        """Cancel the current encoding operation."""
+        if self.cancel_event:
+            self.cancel_event.set()
+            self.cancel_button.Disable()
+            wx.CallAfter(self.progress_details.SetLabel, "Cancelling...")
+
+    def update_progress(self, progress_info):
+        """Update the current file progress display."""
+        wx.CallAfter(self.current_file_progress.SetValue, int(progress_info.percent))
+        
+        # Format progress details with ETA on the same line
+        details = f"Frame: {progress_info.frame} | FPS: {progress_info.fps:.1f} | Speed: {progress_info.speed}"
+        
+        # Add ETA to the same line if available
+        if progress_info.eta_seconds > 0:
+            eta_minutes = int(progress_info.eta_seconds // 60)
+            eta_seconds = int(progress_info.eta_seconds % 60)
+            details += f" | ETA: {eta_minutes:02d}:{eta_seconds:02d}"
+        
+        wx.CallAfter(self.progress_details.SetLabel, details)
+        
+        # Clear the separate time estimate label since we're showing it inline
+        wx.CallAfter(self.time_estimate.SetLabel, "")
+
+    def output_callback(self, line):
+        """Handle FFmpeg output lines."""
+        # This could be used for additional logging if needed
+        pass
 
     def ReEncodeWorker(self, options):
         """Worker thread for reencoding with comprehensive error handling."""
@@ -588,8 +659,17 @@ class ReencodePane(wx.CollapsiblePane):
             if not video_file:
                 continue
                 
+            # Check for cancellation
+            if self.cancel_event.is_set():
+                wx.CallAfter(self.progress_details.SetLabel, "Cancelled by user")
+                break
+                
             video_name = pathlib.Path(video_file).name
             print(f"Encoding video_file: {video_file}")
+            
+            # Update current file label
+            wx.CallAfter(self.current_file_label.SetLabel, f"Current File: {video_name}")
+            wx.CallAfter(self.current_file_progress.SetValue, 0)
             
             try:
                 info = video.info(video_file)
@@ -646,9 +726,37 @@ class ReencodePane(wx.CollapsiblePane):
                 if options["use_crf"]:
                     encode_job.set_crf(options["crf_value"])
 
+                # Set up progress tracking
+                encode_job.set_progress_callback(self.update_progress)
+                encode_job.set_cancel_event(self.cancel_event)
+                self.current_encode_job = encode_job
+
+                # Calculate duration for this specific file
+                if hasattr(info, 'runtime') and info.runtime:
+                    try:
+                        # Parse runtime format like "00:01:23.45" 
+                        time_parts = info.runtime.split(':')
+                        if len(time_parts) >= 3:
+                            hours = int(time_parts[0])
+                            minutes = int(time_parts[1])
+                            seconds = float(time_parts[2])
+                            duration_ms = (hours * 3600 + minutes * 60 + seconds) * 1000
+                            encode_job.total_duration_ms = duration_ms
+                    except (ValueError, IndexError):
+                        pass
+
+                # Define output callback to print to console
+                def console_output_callback(line):
+                    print(line)
+
                 # Perform the encoding
-                encode_job.reencode()
-                successful += 1
+                encode_result = encode_job.reencode(output_callback=console_output_callback)
+                
+                if encode_result and not self.cancel_event.is_set():
+                    successful += 1
+                elif self.cancel_event.is_set():
+                    errors.append(f"{video_name}: Cancelled by user")
+                    break
                 
             except (VideoProcessingError, FFmpegNotFoundError, VideoFileError) as e:
                 error_msg = f"{video_name}: {e}"
@@ -663,12 +771,29 @@ class ReencodePane(wx.CollapsiblePane):
             finally:
                 progress += 1
                 wx.CallAfter(self.total_progress.SetValue, progress)
+                wx.CallAfter(self.current_file_progress.SetValue, 0)
+                self.current_encode_job = None
 
         # Show completion summary
         total_files = len(self.app_state.video_list)
         failed = len(errors)
+        cancelled = self.cancel_event.is_set()
         
-        if errors:
+        # Reset UI state
+        wx.CallAfter(self.reencode_button.Enable)
+        wx.CallAfter(self.cancel_button.Disable)
+        wx.CallAfter(self.current_file_label.SetLabel, "Current File:")
+        wx.CallAfter(self.current_file_progress.SetValue, 0)
+        
+        if cancelled:
+            wx.CallAfter(self.progress_details.SetLabel, "Encoding cancelled")
+            wx.CallAfter(self.time_estimate.SetLabel, "")
+            wx.CallAfter(lambda: wx.MessageBox("Encoding was cancelled by user.", 
+                                              "Encoding Cancelled", wx.OK | wx.ICON_INFORMATION))
+        elif errors:
+            wx.CallAfter(self.progress_details.SetLabel, "Encoding completed with errors")
+            wx.CallAfter(self.time_estimate.SetLabel, "")
+            
             if failed <= 5:
                 error_details = "\n".join(errors)
             else:
@@ -677,10 +802,10 @@ class ReencodePane(wx.CollapsiblePane):
             summary = f"Encoding completed:\n\n✓ {successful} successful\n✗ {failed} failed\n\nErrors:\n{error_details}"
             wx.CallAfter(lambda: wx.MessageBox(summary, "Encoding Complete", wx.OK | wx.ICON_WARNING))
         else:
+            wx.CallAfter(self.progress_details.SetLabel, "All files encoded successfully")
+            wx.CallAfter(self.time_estimate.SetLabel, "")
             wx.CallAfter(lambda: wx.MessageBox(f"All {successful} files encoded successfully!", 
                                               "Encoding Complete", wx.OK | wx.ICON_INFORMATION))
-        
-        wx.CallAfter(self.reencode_button.Enable)
 
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):

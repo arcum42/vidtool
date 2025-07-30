@@ -4,6 +4,9 @@ import datetime
 import pathlib
 import os
 import shutil
+import re
+import threading
+import time
 
 
 class VideoProcessingError(Exception):
@@ -19,6 +22,59 @@ class FFmpegNotFoundError(VideoProcessingError):
 class VideoFileError(VideoProcessingError):
     """Raised when there are issues with video files."""
     pass
+
+
+class ProgressInfo:
+    """Holds progress information for encoding operations."""
+    def __init__(self):
+        self.frame = 0
+        self.fps = 0.0
+        self.bitrate = "0kbits/s"
+        self.total_size = 0
+        self.out_time_ms = 0
+        self.progress = "continue"
+        self.speed = "0x"
+        self.percent = 0.0
+        self.eta_seconds = 0
+        
+    def update_from_line(self, line):
+        """Parse a line of FFmpeg progress output."""
+        if "=" in line:
+            key, value = line.strip().split("=", 1)
+            if key == "frame":
+                self.frame = int(value) if value.isdigit() else 0
+            elif key == "fps":
+                try:
+                    self.fps = float(value)
+                except ValueError:
+                    self.fps = 0.0
+            elif key == "bitrate":
+                self.bitrate = value
+            elif key == "total_size":
+                self.total_size = int(value) if value.isdigit() else 0
+            elif key == "out_time_us":
+                # Convert microseconds to milliseconds
+                self.out_time_ms = int(value) // 1000 if value.isdigit() else 0
+            elif key == "out_time_ms":
+                # FFmpeg reports this in microseconds despite the name
+                self.out_time_ms = int(value) // 1000 if value.isdigit() else 0
+            elif key == "progress":
+                self.progress = value
+            elif key == "speed":
+                self.speed = value
+                
+    def calculate_progress(self, total_duration_ms):
+        """Calculate percentage and ETA based on current progress."""
+        if total_duration_ms > 0 and self.out_time_ms > 0:
+            self.percent = min(100.0, (self.out_time_ms / total_duration_ms) * 100)
+            
+            if self.fps > 0 and self.percent > 0:
+                remaining_ms = total_duration_ms - self.out_time_ms
+                remaining_frames = remaining_ms / 1000 * (self.frame / (self.out_time_ms / 1000)) if self.out_time_ms > 0 else 0
+                self.eta_seconds = remaining_frames / self.fps if self.fps > 0 else 0
+        else:
+            self.percent = 0.0
+            self.eta_seconds = 0
 
 ffprobe_bin = "ffprobe"
 ffmpeg_bin = "ffmpeg"
@@ -49,32 +105,95 @@ AUDIO_CODECS = (
     "copy", "aac", "mp3", "flac", "ogg", "ac3", "opus"
 )
 
-def execute(cmd):
-    """Run a command and print its output line by line with error handling."""
+def execute(command, callback=None, progress_callback=None, cancel_event=None):
+    """
+    Execute a command using subprocess with enhanced error handling and progress tracking.
+    
+    Args:
+        command: List of command and arguments to execute
+        callback: Optional function to call with each line of output
+        progress_callback: Optional function to call with ProgressInfo objects
+        cancel_event: Optional threading.Event to check for cancellation
+        
+    Returns:
+        tuple: (success, stdout, stderr, return_code)
+    """
+    if not command:
+        raise ValueError("Command cannot be empty")
+    
+    stdout_lines = []
+    stderr_lines = []
+    progress_info = ProgressInfo()
+    process = None
+    
     try:
-        print(subprocess.list2cmdline(cmd))
-        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-                             bufsize=1, universal_newlines=True) as p:
-            
-            # Stream output in real-time
-            stdout_lines = []
-            if p.stdout:
-                for line in iter(p.stdout.readline, ''):
-                    if line:
-                        print(line, end='')
-                        stdout_lines.append(line)
-            
-            # Wait for process to complete and check return code
-            return_code = p.wait()
-            if return_code != 0:
-                # Combine stdout lines for error message (ffmpeg outputs to stderr but we redirected)
-                output = ''.join(stdout_lines[-10:])  # Last 10 lines for context
-                raise VideoProcessingError(f"Command failed with return code {return_code}. Last output:\n{output}")
+        # Combine stderr with stdout to capture FFmpeg progress output
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
+            universal_newlines=True,
+            bufsize=1
+        )
+        
+        # Read output line by line
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                # Check for cancellation
+                if cancel_event and cancel_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False, [], ["Process cancelled by user"], -1
                 
+                line = line.strip()
+                if line:
+                    stdout_lines.append(line)
+                    
+                    # Call the general callback if provided
+                    if callback:
+                        callback(line)
+                    
+                    # Parse progress information for FFmpeg
+                    if progress_callback:
+                        # FFmpeg progress lines contain key=value pairs
+                        if "=" in line:
+                            progress_info.update_from_line(line)
+                            
+                            # When we get a complete progress update (indicated by progress=continue or progress=end)
+                            if line.startswith("progress="):
+                                progress_callback(progress_info)
+        
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        # Determine success based on return code
+        success = return_code == 0
+        
+        return success, stdout_lines, stderr_lines, return_code
+        
     except FileNotFoundError as e:
-        raise FFmpegNotFoundError(f"Could not find executable: {cmd[0]}. Please check your FFmpeg installation.")
+        error_msg = f"Command not found: {command[0] if command else 'unknown'}"
+        raise FFmpegNotFoundError(error_msg) from e
+    except PermissionError as e:
+        error_msg = f"Permission denied executing: {command[0] if command else 'unknown'}"
+        raise VideoProcessingError(error_msg) from e
     except Exception as e:
-        raise VideoProcessingError(f"Error executing command: {e}")
+        error_msg = f"Unexpected error executing command: {str(e)}"
+        raise VideoProcessingError(error_msg) from e
+    finally:
+        # Ensure process cleanup
+        try:
+            if process and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        except:
+            pass  # Ignore cleanup errors
 
 def play(video):
     """Play a video file using ffplay with error handling."""
@@ -229,6 +348,35 @@ class encode:
         self.file_info = []
         self.output = ""
         self.arguments = []
+        self.cancel_event = None
+        self.progress_callback = None
+        self.total_duration_ms = 0
+
+    def set_progress_callback(self, callback):
+        """Set a callback function to receive ProgressInfo updates."""
+        self.progress_callback = callback
+        
+    def set_cancel_event(self, cancel_event):
+        """Set a threading.Event to check for cancellation requests."""
+        self.cancel_event = cancel_event
+        
+    def calculate_total_duration(self):
+        """Calculate total duration of all input files in milliseconds."""
+        total_ms = 0
+        for file_info in self.file_info:
+            if hasattr(file_info, 'runtime') and file_info.runtime:
+                # Parse runtime format like "00:01:23.45" 
+                try:
+                    time_parts = file_info.runtime.split(':')
+                    if len(time_parts) >= 3:
+                        hours = int(time_parts[0])
+                        minutes = int(time_parts[1])
+                        seconds = float(time_parts[2])
+                        total_ms += (hours * 3600 + minutes * 60 + seconds) * 1000
+                except (ValueError, IndexError):
+                    pass
+        self.total_duration_ms = total_ms
+        return total_ms
 
     def less_noise(self):
         self.arguments.append('-hide_banner')
@@ -348,6 +496,10 @@ class encode:
         cmd = [ffmpeg_bin]
         self.less_noise()
         
+        # Enable parsable output for progress tracking if callback is set
+        if self.progress_callback:
+            self.parsable_output()
+        
         for input_file in self.input:
             cmd += ['-i', str(input_file)]
             
@@ -355,12 +507,40 @@ class encode:
         cmd.append(str(self.output))
         return cmd
 
-    def reencode(self):
-        """Execute the encoding with comprehensive error handling."""
+    def reencode(self, output_callback=None):
+        """Execute the encoding with comprehensive error handling and progress tracking."""
         try:
             command = self.reencode_str()
             print(f"Starting encode: {' '.join(command)}")
-            execute(command)
+            
+            # Calculate total duration for progress tracking
+            self.calculate_total_duration()
+            
+            # Create progress callback wrapper
+            def progress_wrapper(progress_info):
+                # Calculate percentage based on total duration
+                if self.total_duration_ms > 0:
+                    progress_info.calculate_progress(self.total_duration_ms)
+                
+                # Call the user's callback if provided
+                if self.progress_callback:
+                    self.progress_callback(progress_info)
+            
+            success, stdout, stderr, return_code = execute(
+                command, 
+                callback=output_callback,
+                progress_callback=progress_wrapper,
+                cancel_event=self.cancel_event
+            )
+            
+            if not success:
+                if self.cancel_event and self.cancel_event.is_set():
+                    raise VideoProcessingError("Encoding was cancelled by user")
+                else:
+                    error_msg = f"FFmpeg failed with return code {return_code}"
+                    if stdout:
+                        error_msg += f"\nOutput: {' '.join(stdout[-5:])}"  # Last 5 lines
+                    raise VideoProcessingError(error_msg)
             
             # Verify output file was created
             output_path = pathlib.Path(self.output)
@@ -371,6 +551,7 @@ class encode:
                 raise VideoProcessingError(f"Output file is empty: {self.output}")
                 
             print(f"Encoding completed successfully: {self.output}")
+            return True
             
         except Exception as e:
             # Clean up failed output file
