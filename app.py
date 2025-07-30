@@ -11,6 +11,10 @@ from typing import Optional, List, Dict, Any
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 from modules.video import VideoProcessingError, FFmpegNotFoundError, VideoFileError
+from modules import video
+from modules.presets import PresetManager, PresetError
+from modules.batch import BatchFilter, BatchSelector, BatchOperation
+from modules.output import OutputPathGenerator, OutputPreset, OUTPUT_PRESETS
 
 
 class AppState:
@@ -22,6 +26,7 @@ class AppState:
         self.config: Dict[str, Any] = {}
         self.working_dir: Optional[pathlib.Path] = None
         self.main_frame: Any = None  # Will be set to MyFrame instance (avoid typing conflicts)
+        self.preset_manager: Optional[PresetManager] = None
         
     def load_config(self):
         """Load configuration from config.json file."""
@@ -36,6 +41,10 @@ class AppState:
                 self.config = {}
         else:
             print("Config file not found. Using default settings.")
+            
+        # Initialize preset manager
+        self.preset_manager = PresetManager()
+        self.preset_manager.load_presets()
             
     def save_config(self):
         """Save configuration to config.json file."""
@@ -145,6 +154,27 @@ class VideoList(wx.ListCtrl):
         self.Bind(wx.EVT_LIST_ITEM_CHECKED, self.OnChecked)
         self.refresh()
 
+    def get_video_files_with_depth(self, directory):
+        """Get video files from directory respecting the recursion depth setting."""
+        directory = pathlib.Path(directory)
+        depth = self.app_state.config.get("recursion_depth", 0)
+        
+        if depth == 0:
+            # Unlimited recursion (original behavior)
+            return directory.glob("**/*")
+        elif depth == 1:
+            # Only current directory
+            return directory.glob("*")
+        else:
+            # Limited recursion depth
+            # Build pattern like "*/*/*/*" for depth 3
+            pattern = "/".join(["*"] * depth)
+            files = list(directory.glob("*"))  # Files in current dir
+            for d in range(1, depth + 1):
+                pattern = "/".join(["*"] * d)
+                files.extend(directory.glob(pattern))
+            return files
+
     def OnSelected(self, event):
         selection = self.GetFirstSelected()
         if selection == -1:
@@ -183,14 +213,87 @@ class VideoList(wx.ListCtrl):
             str(self.app_state.working_dir / self.GetItemText(i, 0))
             for i in range(self.GetItemCount()) if self.IsItemChecked(i)
         ]
+        
+        # Update the output preview in the reencode pane
+        if self.main_frame and hasattr(self.main_frame, 'reencode_pane'):
+            self.main_frame.reencode_pane.update_output_preview()
 
-    def refresh(self):
+    def uncheck_video_by_path(self, video_path):
+        """Uncheck a specific video by its absolute path."""
+        try:
+            print(f"Attempting to uncheck video: {video_path}")
+            # Convert absolute path to relative path for comparison
+            video_path = pathlib.Path(video_path)
+            if self.app_state.working_dir:
+                relative_path = str(video_path.relative_to(self.app_state.working_dir))
+                print(f"Looking for relative path: {relative_path}")
+                
+                # Find the item in the list
+                for i in range(self.GetItemCount()):
+                    item_text = self.GetItemText(i, 0)
+                    if item_text == relative_path:
+                        print(f"Found matching item at index {i}: {item_text} - unchecking")
+                        self.CheckItem(i, False)
+                        # Update the video list to remove the unchecked item
+                        self.OnChecked(None)
+                        print(f"Video list after unchecking: {[pathlib.Path(v).name for v in self.app_state.video_list]}")
+                        return
+                
+                print(f"Could not find item with relative path: {relative_path}")
+                print(f"Available items: {[self.GetItemText(i, 0) for i in range(self.GetItemCount())]}")
+        except (ValueError, TypeError) as e:
+            print(f"Could not uncheck video {video_path}: {e}")
+
+    def recheck_videos_by_paths(self, video_paths):
+        """Re-check multiple videos by their absolute paths after a refresh."""
+        try:
+            print(f"recheck_videos_by_paths called with {len(video_paths) if video_paths else 0} paths")
+            if not video_paths or not self.app_state.working_dir:
+                print("No video paths or working directory, returning early")
+                return
+                
+            # Convert all video paths to relative paths for comparison
+            relative_paths = []
+            for video_path in video_paths:
+                try:
+                    video_path = pathlib.Path(video_path)
+                    relative_path = str(video_path.relative_to(self.app_state.working_dir))
+                    relative_paths.append(relative_path)
+                    print(f"Converted {video_path} to relative path: {relative_path}")
+                except (ValueError, TypeError) as e:
+                    print(f"Could not convert video path {video_path}: {e}")
+                    continue
+            
+            print(f"Looking for {len(relative_paths)} relative paths in {self.GetItemCount()} list items")
+            
+            # Check items that match the relative paths
+            checked_count = 0
+            for i in range(self.GetItemCount()):
+                item_text = self.GetItemText(i, 0)
+                if item_text in relative_paths:
+                    print(f"Re-checking item {i}: {item_text}")
+                    self.CheckItem(i, True)
+                    checked_count += 1
+            
+            print(f"Successfully re-checked {checked_count} videos")
+            
+            # Update the video list with newly checked items
+            self.OnChecked(None)
+            
+        except Exception as e:
+            print(f"Could not recheck videos: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def refresh(self, completion_callback=None):
         self.app_state.video_list = []
 
         self.DeleteAllItems()
         self.info_cache = {}
 
         if not self.app_state.working_dir:
+            if completion_callback:
+                wx.CallAfter(completion_callback)
             return
 
         wd = self.app_state.working_dir  # capture current working_dir for thread safety
@@ -207,7 +310,7 @@ class VideoList(wx.ListCtrl):
                                                   "FFmpeg Not Found", wx.OK | wx.ICON_ERROR))
                 return
             
-            for p in sorted(pathlib.Path(wd).glob("**/*")):
+            for p in sorted(self.get_video_files_with_depth(wd)):
                 if p.suffix in VIDEO_EXTENSIONS:
                     abs_path = str(p.resolve())
                     files.append(p.resolve())
@@ -273,6 +376,10 @@ class VideoList(wx.ListCtrl):
                     
                     wx.CallAfter(lambda: wx.MessageBox(error_msg, "Video Processing Errors", wx.OK | wx.ICON_WARNING))
 
+                # Call the completion callback if provided
+                if completion_callback:
+                    wx.CallAfter(completion_callback)
+
             wx.CallAfter(update_ui)
         threading.Thread(target=scan_and_update, daemon=True).start()
 
@@ -292,6 +399,9 @@ class MyFrame(wx.Frame):
 
         settings_panel = SettingsPanel(notebook, self.app_state)
         notebook.AddPage(settings_panel, "Settings")
+        
+        batch_panel = BatchPanel(notebook, self.app_state)
+        notebook.AddPage(batch_panel, "Batch Operations")
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         top = wx.BoxSizer(wx.HORIZONTAL)
@@ -314,11 +424,20 @@ class MyFrame(wx.Frame):
         self.up_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_GO_TO_PARENT, wx.ART_BUTTON))
         self.up_button.Bind(wx.EVT_BUTTON, self.OnGoUp)
 
+        # Recursion depth control
+        self.recursion_label = wx.StaticText(main_panel, label="Depth:")
+        self.recursion_spin = wx.SpinCtrl(main_panel, size=(60, -1), initial=0, min=0, max=20)
+        self.recursion_spin.SetValue(self.app_state.config.get("recursion_depth", 0))  # 0 = unlimited
+        self.recursion_spin.SetToolTip("Directory recursion depth (0 = unlimited)")
+        self.recursion_spin.Bind(wx.EVT_SPINCTRL, self.OnRecursionDepthChanged)
+
         top.Add(self.label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         top.Add(self.working_dir_box, 1, wx.CENTRE | wx.ALL | wx.EXPAND, 0)
         top.Add(self.button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
         top.Add(self.refresh_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
         top.Add(self.up_button, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
+        top.Add(self.recursion_label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        top.Add(self.recursion_spin, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
 
         # --- Splitter Window for Video List and Info ---
         splitter = wx.SplitterWindow(main_panel)
@@ -386,6 +505,16 @@ class MyFrame(wx.Frame):
             self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
             self.listbox.refresh()
 
+    def OnRecursionDepthChanged(self, event):
+        """Handle recursion depth control change."""
+        depth = self.recursion_spin.GetValue()
+        self.app_state.config["recursion_depth"] = depth
+        self.listbox.refresh()  # Refresh the file list with new depth
+        if depth == 0:
+            self.SetStatusText("Directory scan depth: unlimited (all subdirectories)")
+        else:
+            self.SetStatusText(f"Directory scan depth: {depth} level{'s' if depth != 1 else ''} deep")
+
     def OnClose(self, event):
         pane = self.reencode_pane
         self.app_state.config["output_extension"] = pane.extension_choice.GetStringSelection()
@@ -400,6 +529,7 @@ class MyFrame(wx.Frame):
         self.app_state.config["fix_err"] = pane.fix_errors.GetValue()
         self.app_state.config["use_crf"] = pane.crf_checkbox.GetValue()
         self.app_state.config["crf_value"] = str(pane.crf_int.GetValue())
+        self.app_state.config["recursion_depth"] = self.recursion_spin.GetValue()
         self.app_state.config["working_dir"] = str(self.app_state.working_dir) if self.app_state.working_dir else str(pathlib.Path.cwd())
         self.Destroy()
 
@@ -452,6 +582,11 @@ class ReencodePane(wx.CollapsiblePane):
         self.current_encode_job = None
         self.current_file_name = ""
         self.encoding_start_time = 0
+        
+        # Initialize output path generator with default settings
+        self.output_generator = OutputPathGenerator()
+        self.output_generator.set_naming_options(suffix="_encoded")
+        
         super().__init__(parent, label="Reencode Options", style=wx.CP_DEFAULT_STYLE | wx.CP_NO_TLW_RESIZE)
 
         panel = self.GetPane()
@@ -459,6 +594,25 @@ class ReencodePane(wx.CollapsiblePane):
         re_hsizer1 = wx.BoxSizer(wx.HORIZONTAL)
         re_hsizer2 = wx.BoxSizer(wx.HORIZONTAL)
         self.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, self.OnExpand)
+
+        # Preset Management Section
+        preset_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        preset_label = wx.StaticText(panel, label="Preset:")
+        self.preset_choice = wx.ComboBox(panel, style=wx.CB_READONLY)
+        self.load_preset_choices()
+        
+        self.save_preset_button = wx.Button(panel, label="Save Preset...")
+        self.save_preset_button.Bind(wx.EVT_BUTTON, self.OnSavePreset)
+        
+        self.manage_presets_button = wx.Button(panel, label="Manage...")
+        self.manage_presets_button.Bind(wx.EVT_BUTTON, self.OnManagePresets)
+        
+        preset_sizer.Add(preset_label, 0, wx.ALL | wx.ALIGN_CENTER, 5)
+        preset_sizer.Add(self.preset_choice, 1, wx.ALL | wx.EXPAND, 5)
+        preset_sizer.Add(self.save_preset_button, 0, wx.ALL, 5)
+        preset_sizer.Add(self.manage_presets_button, 0, wx.ALL, 5)
+        
+        self.preset_choice.Bind(wx.EVT_COMBOBOX, self.OnPresetSelected)
 
         self.vcodec_checkbox = wx.CheckBox(panel, label="Video Codec:")
         self.vcodec_checkbox.SetValue(self.app_state.config.get("encode_video", False))
@@ -522,10 +676,9 @@ class ReencodePane(wx.CollapsiblePane):
         self.total_label = wx.StaticText(panel, label="Total Progress:")
         self.total_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
         
-        self.current_file_label = wx.StaticText(panel, label="Current File:")
+        self.current_file_label = wx.StaticText(panel, label="→")
         self.current_file_progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
         
-        self.progress_details = wx.StaticText(panel, label="")
         self.time_estimate = wx.StaticText(panel, label="")
 
         re_hsizer1.Add(self.vcodec_checkbox, 0, wx.ALL | wx.ALIGN_CENTER, 0)
@@ -548,20 +701,113 @@ class ReencodePane(wx.CollapsiblePane):
         re_hsizer2.Add(self.extension_choice, 0, wx.ALL | wx.EXPAND, 5)
         
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.output_options_button = wx.Button(panel, label="Output Options...")
+        self.output_options_button.Bind(wx.EVT_BUTTON, self.OnOutputOptions)
+        button_sizer.Add(self.output_options_button, 0, wx.ALL | wx.EXPAND, 5)
         button_sizer.Add(self.reencode_button, 0, wx.ALL | wx.EXPAND, 5)
         button_sizer.Add(self.cancel_button, 0, wx.ALL | wx.EXPAND, 5)
+        
+        # Add preview label for output filename
+        self.output_preview_label = wx.StaticText(panel, label="Preview: (no file selected)")
+        self.output_preview_label.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_ITALIC, wx.FONTWEIGHT_NORMAL))
+        button_sizer.Add(self.output_preview_label, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        
         re_hsizer2.Add(button_sizer, 0, wx.ALL | wx.EXPAND, 5)
         
+        re_vsizer.Add(preset_sizer, 0, wx.ALL | wx.EXPAND, 5)
         re_vsizer.Add(re_hsizer1, 0, wx.ALL | wx.EXPAND, 0)
         re_vsizer.Add(re_hsizer2, 0, wx.ALL | wx.EXPAND, 0)
         re_vsizer.Add(self.total_label, 0, wx.ALL, 5)
         re_vsizer.Add(self.total_progress, 0, wx.EXPAND | wx.ALL, 5)
         re_vsizer.Add(self.current_file_label, 0, wx.ALL, 5)
         re_vsizer.Add(self.current_file_progress, 0, wx.EXPAND | wx.ALL, 5)
-        re_vsizer.Add(self.progress_details, 0, wx.ALL, 5)
         re_vsizer.Add(self.time_estimate, 0, wx.ALL, 5)
 
         panel.SetSizer(re_vsizer)
+        
+        # Load advanced output settings from config after UI is set up
+        self.load_advanced_output_settings()
+        
+        # Bind events to update preview
+        self.suffix_textbox.Bind(wx.EVT_TEXT, self.OnUpdatePreview)
+        self.append_res_checkbox.Bind(wx.EVT_CHECKBOX, self.OnUpdatePreview)
+        self.extension_choice.Bind(wx.EVT_COMBOBOX, self.OnUpdatePreview)
+        self.vcodec_checkbox.Bind(wx.EVT_CHECKBOX, self.OnUpdatePreview)
+        self.vcodec_choice.Bind(wx.EVT_COMBOBOX, self.OnUpdatePreview)
+        self.crf_checkbox.Bind(wx.EVT_CHECKBOX, self.OnUpdatePreview)
+        self.crf_int.Bind(wx.EVT_SPINCTRL, self.OnUpdatePreview)
+        
+        # Initial preview update
+        self.update_output_preview()
+
+    def OnUpdatePreview(self, event=None):
+        """Handle control changes that should update the output preview."""
+        self.update_output_preview()
+        if event:
+            event.Skip()
+
+    def update_output_preview(self):
+        """Update the output filename preview based on current settings."""
+        try:
+            # Get the first selected video file
+            if not self.app_state.video_list:
+                self.output_preview_label.SetLabel("Preview: (no file selected)")
+                return
+                
+            first_video = pathlib.Path(self.app_state.video_list[0])
+            
+            # Sync main controls to output generator
+            self.sync_main_controls_to_generator()
+            
+            # Create a mock options dict with current settings
+            options = {
+                "output_suffix": self.suffix_textbox.GetValue(),
+                "append_res": self.append_res_checkbox.GetValue(),
+                "output_extension": self.extension_choice.GetStringSelection(),
+                "encode_video": self.vcodec_checkbox.GetValue(),
+                "video_codec": self.vcodec_choice.GetStringSelection(),
+                "use_crf": self.crf_checkbox.GetValue(),
+                "crf_value": str(self.crf_int.GetValue()),
+                "fix_resolution": self.fix_res.GetValue()
+            }
+            
+            # Try to get video info for resolution
+            try:
+                info = video.info(str(first_video))
+                output_path = self.output_generator.generate_output_path(first_video, info, options)
+                preview_name = pathlib.Path(output_path).name
+            except Exception as e:
+                # Fallback to simple preview if video info fails
+                print(f"Preview generation failed, using fallback: {e}")
+                suffix = options["output_suffix"]
+                
+                if options["append_res"]:
+                    # Use placeholder resolution for preview
+                    suffix = f"{suffix}_WxH"
+                    
+                if suffix and not suffix.startswith("_"):
+                    suffix = f"_{suffix}"
+                    
+                preview_name = f"{first_video.stem}{suffix}{options['output_extension']}"
+            
+            # Truncate if too long
+            if len(preview_name) > 50:
+                preview_name = preview_name[:47] + "..."
+                
+            self.output_preview_label.SetLabel(f"Preview: {preview_name}")
+            
+        except Exception as e:
+            print(f"Error updating preview: {e}")
+            self.output_preview_label.SetLabel("Preview: (error)")
+
+    def update_status_bar(self, message):
+        """Helper method to update the main frame's status bar."""
+        def update_status():
+            top_frame = wx.GetTopLevelParent(self)
+            if hasattr(top_frame, 'SetStatusText'):
+                top_frame.SetStatusText(message)
+        wx.CallAfter(update_status)
 
     def OnExpand(self, event):
         self.Layout()
@@ -576,9 +822,12 @@ class ReencodePane(wx.CollapsiblePane):
         self.cancel_button.Enable()
         self.cancel_event.clear()
         
+        # Sync main screen controls to output generator before encoding
+        self.sync_main_controls_to_generator()
+        
         # Reset progress displays
         self.current_file_progress.SetValue(0)
-        self.progress_details.SetLabel("")
+        self.update_status_bar("Starting encoding...")
         self.time_estimate.SetLabel("")
         self.encoding_start_time = time.time()
         
@@ -605,7 +854,7 @@ class ReencodePane(wx.CollapsiblePane):
         if self.cancel_event:
             self.cancel_event.set()
             self.cancel_button.Disable()
-            wx.CallAfter(self.progress_details.SetLabel, "Cancelling...")
+            self.update_status_bar("Cancelling...")
 
     def update_progress(self, progress_info):
         """Update the current file progress display."""
@@ -620,7 +869,8 @@ class ReencodePane(wx.CollapsiblePane):
             eta_seconds = int(progress_info.eta_seconds % 60)
             details += f" | ETA: {eta_minutes:02d}:{eta_seconds:02d}"
         
-        wx.CallAfter(self.progress_details.SetLabel, details)
+        # Get the main frame to update status bar
+        wx.CallAfter(self.update_status_bar, details)
         
         # Clear the separate time estimate label since we're showing it inline
         wx.CallAfter(self.time_estimate.SetLabel, "")
@@ -661,15 +911,11 @@ class ReencodePane(wx.CollapsiblePane):
                 
             # Check for cancellation
             if self.cancel_event.is_set():
-                wx.CallAfter(self.progress_details.SetLabel, "Cancelled by user")
+                self.update_status_bar("Cancelled by user")
                 break
                 
             video_name = pathlib.Path(video_file).name
             print(f"Encoding video_file: {video_file}")
-            
-            # Update current file label
-            wx.CallAfter(self.current_file_label.SetLabel, f"Current File: {video_name}")
-            wx.CallAfter(self.current_file_progress.SetValue, 0)
             
             try:
                 info = video.info(video_file)
@@ -688,15 +934,36 @@ class ReencodePane(wx.CollapsiblePane):
                     
                 encode_job = video.encode()
                 encode_job.add_input(video_file)
-                encode_job.add_output_from_input(file_append=output_suffix, file_extension=options["output_extension"])
+                
+                # Use advanced output path generator instead of simple suffix
+                try:
+                    video_info_obj = info
+                    output_path = self.output_generator.generate_output_path(
+                        pathlib.Path(video_file), video_info_obj, options)
+                    encode_job.add_output(str(output_path))
+                except Exception as e:
+                    # Fallback to original method if output generator fails
+                    print(f"Output generator failed, using fallback: {e}")
+                    encode_job.add_output_from_input(file_append=output_suffix, file_extension=options["output_extension"])
 
-                # Check if output file already exists
+                # Get the output filename for display
+                output_name = pathlib.Path(encode_job.output).name
+                
+                # Update current file label with both input and output filenames
+                wx.CallAfter(self.current_file_label.SetLabel, f"{video_name} → {output_name}")
+                wx.CallAfter(self.current_file_progress.SetValue, 0)
+
+                # Check if output file already exists and handle according to policy
                 if pathlib.Path(encode_job.output).exists():
-                    print(f"Output file '{encode_job.output}' already exists. Skipping.")
-                    errors.append(f"{video_name}: Output file already exists")
-                    progress += 1
-                    wx.CallAfter(self.total_progress.SetValue, progress)
-                    continue
+                    if self.output_generator.overwrite_policy == "skip":
+                        print(f"Output file '{encode_job.output}' already exists. Skipping.")
+                        errors.append(f"{video_name}: Output file already exists")
+                        progress += 1
+                        wx.CallAfter(self.total_progress.SetValue, progress)
+                        continue
+                    elif self.output_generator.overwrite_policy == "overwrite":
+                        print(f"Output file '{encode_job.output}' already exists. Will overwrite.")
+                    # increment policy is handled by the output generator itself
 
                 # Configure encoding options
                 if options["encode_video"]:
@@ -754,6 +1021,32 @@ class ReencodePane(wx.CollapsiblePane):
                 
                 if encode_result and not self.cancel_event.is_set():
                     successful += 1
+                    
+                    # Capture the completed video file path before any async operations
+                    completed_video_file = video_file
+                    
+                    # After successful encoding, refresh the video list and recheck remaining videos
+                    top_frame = wx.GetTopLevelParent(self)
+                    if hasattr(top_frame, "listbox"):
+                        def refresh_and_recheck():
+                            # First uncheck the completed video to update the video list
+                            print(f"Unchecking completed video: {pathlib.Path(completed_video_file).name}")
+                            top_frame.listbox.uncheck_video_by_path(completed_video_file)
+                            
+                            # Get the updated list of selected videos (should exclude the just-processed one)
+                            remaining_videos = list(self.app_state.video_list)  # Make a copy
+                            print(f"Current video_list after unchecking: {[pathlib.Path(v).name for v in remaining_videos]}")
+                            print(f"Preserving selection for {len(remaining_videos)} remaining videos: {[pathlib.Path(v).name for v in remaining_videos]}")
+                            
+                            # Refresh the list to show the new encoded file
+                            def on_refresh_complete():
+                                print(f"Refresh completed, re-checking {len(remaining_videos)} videos")
+                                top_frame.listbox.recheck_videos_by_paths(remaining_videos)
+                            
+                            top_frame.listbox.refresh(completion_callback=on_refresh_complete)
+                        
+                        wx.CallAfter(refresh_and_recheck)
+                        
                 elif self.cancel_event.is_set():
                     errors.append(f"{video_name}: Cancelled by user")
                     break
@@ -782,16 +1075,16 @@ class ReencodePane(wx.CollapsiblePane):
         # Reset UI state
         wx.CallAfter(self.reencode_button.Enable)
         wx.CallAfter(self.cancel_button.Disable)
-        wx.CallAfter(self.current_file_label.SetLabel, "Current File:")
+        wx.CallAfter(self.current_file_label.SetLabel, "→")
         wx.CallAfter(self.current_file_progress.SetValue, 0)
         
         if cancelled:
-            wx.CallAfter(self.progress_details.SetLabel, "Encoding cancelled")
+            self.update_status_bar("Encoding cancelled")
             wx.CallAfter(self.time_estimate.SetLabel, "")
             wx.CallAfter(lambda: wx.MessageBox("Encoding was cancelled by user.", 
                                               "Encoding Cancelled", wx.OK | wx.ICON_INFORMATION))
         elif errors:
-            wx.CallAfter(self.progress_details.SetLabel, "Encoding completed with errors")
+            self.update_status_bar("Encoding completed with errors")
             wx.CallAfter(self.time_estimate.SetLabel, "")
             
             if failed <= 5:
@@ -802,7 +1095,7 @@ class ReencodePane(wx.CollapsiblePane):
             summary = f"Encoding completed:\n\n✓ {successful} successful\n✗ {failed} failed\n\nErrors:\n{error_details}"
             wx.CallAfter(lambda: wx.MessageBox(summary, "Encoding Complete", wx.OK | wx.ICON_WARNING))
         else:
-            wx.CallAfter(self.progress_details.SetLabel, "All files encoded successfully")
+            self.update_status_bar("All files encoded successfully")
             wx.CallAfter(self.time_estimate.SetLabel, "")
             wx.CallAfter(lambda: wx.MessageBox(f"All {successful} files encoded successfully!", 
                                               "Encoding Complete", wx.OK | wx.ICON_INFORMATION))
@@ -810,6 +1103,1220 @@ class ReencodePane(wx.CollapsiblePane):
         top_frame = wx.GetTopLevelParent(self)
         if hasattr(top_frame, "listbox"):
             wx.CallAfter(top_frame.listbox.refresh)
+
+    def load_preset_choices(self):
+        """Load available presets into the choice control."""
+        if self.app_state.preset_manager:
+            preset_names = ["[Custom Settings]"] + list(self.app_state.preset_manager.get_preset_names())
+            self.preset_choice.Clear()
+            self.preset_choice.AppendItems(preset_names)
+            self.preset_choice.SetSelection(0)  # Default to custom settings
+
+    def OnPresetSelected(self, event):
+        """Handle preset selection."""
+        selection = self.preset_choice.GetSelection()
+        if selection <= 0:  # Custom settings selected
+            return
+            
+        preset_name = self.preset_choice.GetStringSelection()
+        if self.app_state.preset_manager:
+            try:
+                preset = self.app_state.preset_manager.get_preset(preset_name)
+                self.apply_preset_settings(preset)
+            except PresetError as e:
+                wx.MessageBox(f"Error loading preset: {e}", "Preset Error", wx.OK | wx.ICON_ERROR)
+
+    def apply_preset_settings(self, preset):
+        """Apply preset settings to the interface."""
+        # Video codec settings
+        if "encode_video" in preset:
+            self.vcodec_checkbox.SetValue(preset["encode_video"])
+        if "video_codec" in preset and preset["video_codec"] in VIDEO_CODECS:
+            self.vcodec_choice.SetSelection(VIDEO_CODECS.index(preset["video_codec"]))
+        
+        # Audio codec settings
+        if "encode_audio" in preset:
+            self.acodec_checkbox.SetValue(preset["encode_audio"])
+        if "audio_codec" in preset and preset["audio_codec"] in AUDIO_CODECS:
+            self.acodec_choice.SetSelection(AUDIO_CODECS.index(preset["audio_codec"]))
+        
+        # CRF settings
+        if "use_crf" in preset:
+            self.crf_checkbox.SetValue(preset["use_crf"])
+        if "crf_value" in preset:
+            self.crf_int.SetValue(preset["crf_value"])
+        
+        # Output settings
+        if "output_suffix" in preset:
+            self.suffix_textbox.SetValue(preset["output_suffix"])
+        if "append_res" in preset:
+            self.append_res_checkbox.SetValue(preset["append_res"])
+        if "output_extension" in preset and preset["output_extension"] in VIDEO_EXTENSIONS:
+            self.extension_choice.SetSelection(list(VIDEO_EXTENSIONS).index(preset["output_extension"]))
+        
+        # Subtitle settings
+        sub_list = ["None", "First", "All", "srt"]
+        if "subtitles" in preset and preset["subtitles"] in sub_list:
+            self.sub_choice.SetSelection(sub_list.index(preset["subtitles"]))
+        
+        # Other settings
+        if "no_data" in preset:
+            self.exclude_data_streams.SetValue(preset["no_data"])
+        if "fix_resolution" in preset:
+            self.fix_res.SetValue(preset["fix_resolution"])
+        if "fix_err" in preset:
+            self.fix_errors.SetValue(preset["fix_err"])
+            
+        # Update preview after applying preset
+        self.update_output_preview()
+
+    def get_current_settings(self):
+        """Get current settings from the interface."""
+        sub_list = ["None", "First", "All", "srt"]
+        return {
+            "encode_video": self.vcodec_checkbox.GetValue(),
+            "video_codec": list(VIDEO_CODECS)[self.vcodec_choice.GetSelection()],
+            "encode_audio": self.acodec_checkbox.GetValue(),
+            "audio_codec": list(AUDIO_CODECS)[self.acodec_choice.GetSelection()],
+            "use_crf": self.crf_checkbox.GetValue(),
+            "crf_value": self.crf_int.GetValue(),
+            "output_suffix": self.suffix_textbox.GetValue(),
+            "append_res": self.append_res_checkbox.GetValue(),
+            "output_extension": list(VIDEO_EXTENSIONS)[self.extension_choice.GetSelection()],
+            "subtitles": sub_list[self.sub_choice.GetSelection()],
+            "no_data": self.exclude_data_streams.GetValue(),
+            "fix_resolution": self.fix_res.GetValue(),
+            "fix_err": self.fix_errors.GetValue()
+        }
+
+    def OnSavePreset(self, event):
+        """Handle saving current settings as a preset."""
+        dlg = wx.TextEntryDialog(self, "Enter preset name:", "Save Preset")
+        if dlg.ShowModal() == wx.ID_OK:
+            preset_name = dlg.GetValue().strip()
+            if preset_name:
+                if self.app_state.preset_manager:
+                    try:
+                        current_settings = self.get_current_settings()
+                        self.app_state.preset_manager.save_preset(preset_name, current_settings)
+                        self.load_preset_choices()  # Refresh the list
+                        # Select the newly created preset
+                        for i in range(self.preset_choice.GetCount()):
+                            if self.preset_choice.GetString(i) == preset_name:
+                                self.preset_choice.SetSelection(i)
+                                break
+                        wx.MessageBox(f"Preset '{preset_name}' saved successfully!", "Preset Saved", 
+                                    wx.OK | wx.ICON_INFORMATION)
+                    except PresetError as e:
+                        wx.MessageBox(f"Error saving preset: {e}", "Preset Error", wx.OK | wx.ICON_ERROR)
+        dlg.Destroy()
+
+    def OnManagePresets(self, event):
+        """Open preset management dialog."""
+        dlg = PresetManagerDialog(self, self.app_state.preset_manager)
+        if dlg.ShowModal() == wx.ID_OK:
+            self.load_preset_choices()  # Refresh the list
+        dlg.Destroy()
+
+    def OnOutputOptions(self, event):
+        """Open advanced output options dialog."""
+        # Sync main screen controls to output generator before opening dialog
+        self.sync_main_controls_to_generator()
+        
+        dlg = OutputOptionsDialog(self, self.output_generator)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Optionally sync back to main screen controls
+            self.sync_generator_to_main_controls()
+            # Update preview after output options change
+            self.update_output_preview()
+        dlg.Destroy()
+    
+    def sync_main_controls_to_generator(self):
+        """Sync main screen controls (suffix, extension, append resolution) to output generator."""
+        # Get current values from main screen controls
+        suffix = self.suffix_textbox.GetValue()
+        extension = self.extension_choice.GetStringSelection()
+        append_resolution = self.append_res_checkbox.GetValue()
+        
+        # Update output generator with main screen values (only basic naming)
+        # Note: We only sync the basic options that exist on the main screen
+        # Advanced options (directory, patterns, etc.) are preserved
+        self.output_generator.set_naming_options(
+            suffix=suffix,
+            extension=extension,
+            include_resolution=append_resolution,
+            # Preserve other advanced options
+            include_codec=self.output_generator.include_codec,
+            include_quality=self.output_generator.include_quality,
+            include_date=self.output_generator.include_date
+        )
+        
+    def sync_generator_to_main_controls(self):
+        """Sync output generator settings back to main screen controls."""
+        # Update main screen controls with generator values
+        self.suffix_textbox.SetValue(self.output_generator.suffix)
+        
+        # Find and select the extension in the choice control
+        extension = self.output_generator.extension
+        extension_index = self.extension_choice.FindString(extension)
+        if extension_index != wx.NOT_FOUND:
+            self.extension_choice.SetSelection(extension_index)
+        else:
+            # If exact match not found, try to set the value directly
+            self.extension_choice.SetValue(extension)
+            
+        self.append_res_checkbox.SetValue(self.output_generator.include_resolution)
+        
+        # Update the config to keep main screen and generator in sync
+        self.app_state.config["output_suffix"] = self.output_generator.suffix
+        self.app_state.config["output_extension"] = self.output_generator.extension
+        self.app_state.config["append_res"] = self.output_generator.include_resolution  # Use correct config key
+        
+        # Save all advanced output settings to config
+        self.save_advanced_output_settings()
+        
+        # Update preview after syncing
+        self.update_output_preview()
+    
+    def save_advanced_output_settings(self):
+        """Save all advanced output settings to app config."""
+        config = self.app_state.config
+        
+        # Directory settings
+        config["output_directory"] = str(self.output_generator.output_directory) if self.output_generator.output_directory else ""
+        config["subdirectory_pattern"] = self.output_generator.subdirectory_pattern
+        
+        # Naming settings
+        config["filename_pattern"] = self.output_generator.filename_pattern
+        config["include_codec"] = self.output_generator.include_codec
+        config["include_quality"] = self.output_generator.include_quality
+        config["include_date"] = self.output_generator.include_date
+        
+        # File handling
+        config["overwrite_policy"] = self.output_generator.overwrite_policy
+        config["preserve_directory_structure"] = self.output_generator.preserve_directory_structure
+    
+    def load_advanced_output_settings(self):
+        """Load all advanced output settings from app config."""
+        config = self.app_state.config
+        
+        # Directory settings
+        output_dir = config.get("output_directory", "")
+        if output_dir:
+            self.output_generator.set_output_directory(pathlib.Path(output_dir))
+        else:
+            self.output_generator.set_output_directory(None)
+            
+        self.output_generator.set_subdirectory_pattern(config.get("subdirectory_pattern", ""))
+        
+        # Naming settings
+        self.output_generator.set_filename_pattern(config.get("filename_pattern", "{stem}{suffix}{extension}"))
+        
+        # Advanced naming options
+        self.output_generator.set_naming_options(
+            suffix=config.get("output_suffix", "_encoded"),
+            extension=config.get("output_extension", ".mkv"),
+            include_resolution=config.get("append_res", False),  # Use correct config key
+            include_codec=config.get("include_codec", False),
+            include_quality=config.get("include_quality", False),
+            include_date=config.get("include_date", False)
+        )
+        
+        # File handling
+        self.output_generator.set_overwrite_policy(config.get("overwrite_policy", "skip"))
+        self.output_generator.preserve_directory_structure = config.get("preserve_directory_structure", True)
+        
+        # Update preview after loading settings
+        self.update_output_preview()
+
+
+class BatchPanel(wx.Panel):
+    """Panel for advanced batch operations."""
+    
+    def __init__(self, parent, app_state):
+        super().__init__(parent)
+        self.app_state = app_state
+        self.batch_selector = None
+        self.current_filter = BatchFilter()
+        self.filtered_files = []
+        
+        # Main sizer
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Directory selection
+        dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        dir_label = wx.StaticText(self, label="Scan Directory:")
+        self.dir_textctrl = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.dir_button = wx.Button(self, label="Browse...")
+        self.dir_button.Bind(wx.EVT_BUTTON, self.OnBrowseDirectory)
+        
+        dir_sizer.Add(dir_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        dir_sizer.Add(self.dir_textctrl, 1, wx.ALL | wx.EXPAND, 5)
+        dir_sizer.Add(self.dir_button, 0, wx.ALL, 5)
+        
+        # Scan options
+        scan_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Scan Options")
+        scan_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.recursive_check = wx.CheckBox(self, label="Include subdirectories")
+        self.recursive_check.SetValue(True)
+        
+        self.scan_button = wx.Button(self, label="Scan for Videos")
+        self.scan_button.Bind(wx.EVT_BUTTON, self.OnScanDirectory)
+        
+        scan_sizer.Add(self.recursive_check, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        scan_sizer.Add(self.scan_button, 0, wx.ALL, 5)
+        scan_box.Add(scan_sizer, 0, wx.EXPAND)
+        
+        # File filtering
+        filter_notebook = wx.Notebook(self)
+        
+        # Basic filters
+        basic_panel = wx.Panel(filter_notebook)
+        basic_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Size filter
+        size_box = wx.StaticBoxSizer(wx.HORIZONTAL, basic_panel, "File Size (MB)")
+        self.min_size_check = wx.CheckBox(basic_panel, label="Min:")
+        self.min_size_spin = wx.SpinCtrlDouble(basic_panel, min=0, max=100000, initial=0, inc=1)
+        self.max_size_check = wx.CheckBox(basic_panel, label="Max:")
+        self.max_size_spin = wx.SpinCtrlDouble(basic_panel, min=0, max=100000, initial=1000, inc=1)
+        
+        size_box.Add(self.min_size_check, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        size_box.Add(self.min_size_spin, 0, wx.ALL, 5)
+        size_box.Add(self.max_size_check, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        size_box.Add(self.max_size_spin, 0, wx.ALL, 5)
+        
+        # Duration filter
+        duration_box = wx.StaticBoxSizer(wx.HORIZONTAL, basic_panel, "Duration (seconds)")
+        self.min_duration_check = wx.CheckBox(basic_panel, label="Min:")
+        self.min_duration_spin = wx.SpinCtrlDouble(basic_panel, min=0, max=100000, initial=0, inc=1)
+        self.max_duration_check = wx.CheckBox(basic_panel, label="Max:")
+        self.max_duration_spin = wx.SpinCtrlDouble(basic_panel, min=0, max=100000, initial=7200, inc=1)
+        
+        duration_box.Add(self.min_duration_check, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        duration_box.Add(self.min_duration_spin, 0, wx.ALL, 5)
+        duration_box.Add(self.max_duration_check, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        duration_box.Add(self.max_duration_spin, 0, wx.ALL, 5)
+        
+        basic_sizer.Add(size_box, 0, wx.EXPAND | wx.ALL, 5)
+        basic_sizer.Add(duration_box, 0, wx.EXPAND | wx.ALL, 5)
+        basic_panel.SetSizer(basic_sizer)
+        filter_notebook.AddPage(basic_panel, "Basic Filters")
+        
+        # Advanced filters
+        advanced_panel = wx.Panel(filter_notebook)
+        advanced_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Resolution filter
+        res_box = wx.StaticBoxSizer(wx.HORIZONTAL, advanced_panel, "Resolution")
+        res_box.Add(wx.StaticText(advanced_panel, label="Min Width:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.min_width_spin = wx.SpinCtrl(advanced_panel, min=0, max=10000, initial=0)
+        res_box.Add(self.min_width_spin, 0, wx.ALL, 5)
+        res_box.Add(wx.StaticText(advanced_panel, label="Max Width:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.max_width_spin = wx.SpinCtrl(advanced_panel, min=0, max=10000, initial=4096)
+        res_box.Add(self.max_width_spin, 0, wx.ALL, 5)
+        
+        # Codec filter
+        codec_box = wx.StaticBoxSizer(wx.VERTICAL, advanced_panel, "Codecs")
+        codec_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        vcodec_sizer = wx.BoxSizer(wx.VERTICAL)
+        vcodec_sizer.Add(wx.StaticText(advanced_panel, label="Video Codecs:"), 0, wx.ALL, 5)
+        self.vcodec_list = wx.CheckListBox(advanced_panel, choices=list(VIDEO_CODECS))
+        vcodec_sizer.Add(self.vcodec_list, 1, wx.EXPAND | wx.ALL, 5)
+        
+        acodec_sizer = wx.BoxSizer(wx.VERTICAL)
+        acodec_sizer.Add(wx.StaticText(advanced_panel, label="Audio Codecs:"), 0, wx.ALL, 5)
+        self.acodec_list = wx.CheckListBox(advanced_panel, choices=list(AUDIO_CODECS))
+        acodec_sizer.Add(self.acodec_list, 1, wx.EXPAND | wx.ALL, 5)
+        
+        codec_sizer.Add(vcodec_sizer, 1, wx.EXPAND | wx.ALL, 5)
+        codec_sizer.Add(acodec_sizer, 1, wx.EXPAND | wx.ALL, 5)
+        codec_box.Add(codec_sizer, 1, wx.EXPAND)
+        
+        advanced_sizer.Add(res_box, 0, wx.EXPAND | wx.ALL, 5)
+        advanced_sizer.Add(codec_box, 1, wx.EXPAND | wx.ALL, 5)
+        advanced_panel.SetSizer(advanced_sizer)
+        filter_notebook.AddPage(advanced_panel, "Advanced Filters")
+        
+        # Filename patterns
+        pattern_panel = wx.Panel(filter_notebook)
+        pattern_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        include_box = wx.StaticBoxSizer(wx.VERTICAL, pattern_panel, "Include Patterns")
+        self.include_patterns = wx.TextCtrl(pattern_panel, style=wx.TE_MULTILINE)
+        self.include_patterns.SetToolTip("One pattern per line. Use * for wildcards. Example: *season*episode*")
+        include_box.Add(self.include_patterns, 1, wx.EXPAND | wx.ALL, 5)
+        
+        exclude_box = wx.StaticBoxSizer(wx.VERTICAL, pattern_panel, "Exclude Patterns")
+        self.exclude_patterns = wx.TextCtrl(pattern_panel, style=wx.TE_MULTILINE)
+        self.exclude_patterns.SetToolTip("One pattern per line. Use * for wildcards. Example: *sample*")
+        exclude_box.Add(self.exclude_patterns, 1, wx.EXPAND | wx.ALL, 5)
+        
+        pattern_sizer.Add(include_box, 1, wx.EXPAND | wx.ALL, 5)
+        pattern_sizer.Add(exclude_box, 1, wx.EXPAND | wx.ALL, 5)
+        pattern_panel.SetSizer(pattern_sizer)
+        filter_notebook.AddPage(pattern_panel, "Filename Patterns")
+        
+        # Filter buttons
+        filter_buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.apply_filter_button = wx.Button(self, label="Apply Filters")
+        self.apply_filter_button.Bind(wx.EVT_BUTTON, self.OnApplyFilters)
+        self.clear_filter_button = wx.Button(self, label="Clear Filters")
+        self.clear_filter_button.Bind(wx.EVT_BUTTON, self.OnClearFilters)
+        
+        filter_buttons.Add(self.apply_filter_button, 0, wx.ALL, 5)
+        filter_buttons.Add(self.clear_filter_button, 0, wx.ALL, 5)
+        
+        # Results
+        results_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Filtered Results")
+        self.results_list = wx.ListCtrl(self, style=wx.LC_REPORT)
+        self.results_list.AppendColumn("Filename", width=300)
+        self.results_list.AppendColumn("Size (MB)", width=80)
+        self.results_list.AppendColumn("Duration", width=80)
+        self.results_list.AppendColumn("Resolution", width=100)
+        
+        results_box.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 5)
+        
+        # Status
+        self.status_label = wx.StaticText(self, label="No files scanned")
+        
+        # Batch operation controls
+        batch_box = wx.StaticBoxSizer(wx.HORIZONTAL, self, "Batch Operation")
+        
+        preset_label = wx.StaticText(self, label="Preset:")
+        self.batch_preset_choice = wx.ComboBox(self, style=wx.CB_READONLY)
+        self.load_batch_preset_choices()
+        
+        self.process_button = wx.Button(self, label="Process Selected Files")
+        self.process_button.Bind(wx.EVT_BUTTON, self.OnProcessBatch)
+        self.process_button.Enable(False)
+        
+        batch_box.Add(preset_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        batch_box.Add(self.batch_preset_choice, 1, wx.ALL | wx.EXPAND, 5)
+        batch_box.Add(self.process_button, 0, wx.ALL, 5)
+        
+        # Layout
+        main_sizer.Add(dir_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(scan_box, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(filter_notebook, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(filter_buttons, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+        main_sizer.Add(results_box, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(self.status_label, 0, wx.ALL, 5)
+        main_sizer.Add(batch_box, 0, wx.EXPAND | wx.ALL, 5)
+        
+        self.SetSizer(main_sizer)
+        
+        # Set default directory
+        if self.app_state.working_dir:
+            self.dir_textctrl.SetValue(str(self.app_state.working_dir))
+    
+    def load_batch_preset_choices(self):
+        """Load available presets for batch operations."""
+        if self.app_state.preset_manager:
+            preset_names = list(self.app_state.preset_manager.get_preset_names())
+            self.batch_preset_choice.Clear()
+            self.batch_preset_choice.AppendItems(preset_names)
+            if preset_names:
+                self.batch_preset_choice.SetSelection(0)
+    
+    def OnBrowseDirectory(self, event):
+        """Handle directory browsing."""
+        dlg = wx.DirDialog(self, "Choose directory to scan:")
+        if dlg.ShowModal() == wx.ID_OK:
+            self.dir_textctrl.SetValue(dlg.GetPath())
+        dlg.Destroy()
+    
+    def OnScanDirectory(self, event):
+        """Handle directory scanning."""
+        directory = self.dir_textctrl.GetValue()
+        if not directory:
+            wx.MessageBox("Please select a directory to scan.", "No Directory", wx.OK | wx.ICON_WARNING)
+            return
+        
+        try:
+            self.batch_selector = BatchSelector(directory)
+            recursive = self.recursive_check.GetValue()
+            
+            # Show progress
+            self.status_label.SetLabel("Scanning directory...")
+            wx.GetApp().Yield()
+            
+            files = self.batch_selector.scan_directory(recursive=recursive)
+            self.status_label.SetLabel(f"Found {len(files)} video files")
+            
+            # Populate results list
+            self.populate_results(files)
+            
+        except Exception as e:
+            wx.MessageBox(f"Error scanning directory: {e}", "Scan Error", wx.OK | wx.ICON_ERROR)
+    
+    def OnApplyFilters(self, event):
+        """Apply filters to the scanned files."""
+        if not self.batch_selector:
+            wx.MessageBox("Please scan a directory first.", "No Files", wx.OK | wx.ICON_WARNING)
+            return
+        
+        # Build filter
+        self.current_filter = BatchFilter()
+        
+        # Size filters
+        if self.min_size_check.GetValue():
+            self.current_filter.min_size_mb = self.min_size_spin.GetValue()
+        if self.max_size_check.GetValue():
+            self.current_filter.max_size_mb = self.max_size_spin.GetValue()
+        
+        # Duration filters
+        if self.min_duration_check.GetValue():
+            self.current_filter.min_duration_sec = self.min_duration_spin.GetValue()
+        if self.max_duration_check.GetValue():
+            self.current_filter.max_duration_sec = self.max_duration_spin.GetValue()
+        
+        # Resolution filters
+        if self.min_width_spin.GetValue() > 0:
+            self.current_filter.min_width = self.min_width_spin.GetValue()
+        if self.max_width_spin.GetValue() < 4096:
+            self.current_filter.max_width = self.max_width_spin.GetValue()
+        
+        # Codec filters
+        video_codecs = [list(VIDEO_CODECS)[i] for i in self.vcodec_list.GetCheckedItems()]
+        if video_codecs:
+            self.current_filter.add_video_codecs(video_codecs)
+        
+        audio_codecs = [list(AUDIO_CODECS)[i] for i in self.acodec_list.GetCheckedItems()]
+        if audio_codecs:
+            self.current_filter.add_audio_codecs(audio_codecs)
+        
+        # Pattern filters
+        include_patterns = [p.strip() for p in self.include_patterns.GetValue().split('\n') if p.strip()]
+        if include_patterns:
+            self.current_filter.add_filename_patterns(include_patterns)
+        
+        exclude_patterns = [p.strip() for p in self.exclude_patterns.GetValue().split('\n') if p.strip()]
+        if exclude_patterns:
+            self.current_filter.add_exclude_patterns(exclude_patterns)
+        
+        # Apply filter
+        self.status_label.SetLabel("Applying filters...")
+        wx.GetApp().Yield()
+        
+        try:
+            self.filtered_files = self.batch_selector.apply_filter(self.current_filter)
+            self.status_label.SetLabel(f"Filter applied: {len(self.filtered_files)} files match")
+            self.populate_results(self.filtered_files)
+            self.process_button.Enable(len(self.filtered_files) > 0)
+            
+        except Exception as e:
+            wx.MessageBox(f"Error applying filters: {e}", "Filter Error", wx.OK | wx.ICON_ERROR)
+    
+    def OnClearFilters(self, event):
+        """Clear all filters and show all scanned files."""
+        if not self.batch_selector:
+            return
+        
+        # Reset all filter controls
+        self.min_size_check.SetValue(False)
+        self.max_size_check.SetValue(False)
+        self.min_duration_check.SetValue(False)
+        self.max_duration_check.SetValue(False)
+        self.min_width_spin.SetValue(0)
+        self.max_width_spin.SetValue(4096)
+        self.vcodec_list.Clear()
+        self.acodec_list.Clear()
+        self.include_patterns.SetValue("")
+        self.exclude_patterns.SetValue("")
+        
+        # Show all files
+        self.filtered_files = self.batch_selector.files
+        self.populate_results(self.filtered_files)
+        self.status_label.SetLabel(f"Filters cleared: showing all {len(self.filtered_files)} files")
+        self.process_button.Enable(len(self.filtered_files) > 0)
+    
+    def populate_results(self, files):
+        """Populate the results list with file information."""
+        self.results_list.DeleteAllItems()
+        
+        for i, file_path in enumerate(files):
+            index = self.results_list.InsertItem(i, file_path.name)
+            
+            # Get file info if cached
+            file_info = None
+            if self.batch_selector:
+                file_info = self.batch_selector.get_file_info(file_path)
+            
+            if file_info:
+                self.results_list.SetItem(index, 1, f"{file_info.size_mb:.1f}")
+                self.results_list.SetItem(index, 2, f"{file_info.duration:.1f}s")
+                self.results_list.SetItem(index, 3, f"{file_info.max_width}x{file_info.max_height}")
+            else:
+                # Show file size at least
+                try:
+                    size_mb = file_path.stat().st_size / (1024 * 1024)
+                    self.results_list.SetItem(index, 1, f"{size_mb:.1f}")
+                except:
+                    self.results_list.SetItem(index, 1, "Unknown")
+                self.results_list.SetItem(index, 2, "Unknown")
+                self.results_list.SetItem(index, 3, "Unknown")
+    
+    def OnProcessBatch(self, event):
+        """Process the filtered files with the selected preset."""
+        if not self.filtered_files:
+            wx.MessageBox("No files to process.", "No Files", wx.OK | wx.ICON_WARNING)
+            return
+        
+        preset_selection = self.batch_preset_choice.GetSelection()
+        if preset_selection == wx.NOT_FOUND:
+            wx.MessageBox("Please select a preset.", "No Preset", wx.OK | wx.ICON_WARNING)
+            return
+        
+        preset_name = self.batch_preset_choice.GetStringSelection()
+        
+        # Create batch operation
+        batch_op = BatchOperation(f"Batch operation with {preset_name}")
+        batch_op.set_files(self.filtered_files)
+        batch_op.set_preset(preset_name)
+        
+        # Configure output
+        dlg = BatchOutputDialog(self, batch_op)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Validate and execute
+            errors = batch_op.validate()
+            if errors:
+                error_text = "\n".join(errors)
+                wx.MessageBox(f"Batch operation validation failed:\n\n{error_text}", 
+                            "Validation Error", wx.OK | wx.ICON_ERROR)
+            else:
+                # Show summary and confirm
+                summary = batch_op.get_summary()
+                summary_text = f"""Batch Operation Summary:
+                
+Files to process: {summary['file_count']}
+Preset: {summary['preset']}
+Output suffix: {summary['output_suffix']}
+Output extension: {summary['output_extension']}
+Output directory: {summary['output_directory']}
+Overwrite existing: {summary['overwrite_existing']}
+
+Do you want to proceed?"""
+                
+                if wx.MessageBox(summary_text, "Confirm Batch Operation", 
+                               wx.YES_NO | wx.ICON_QUESTION) == wx.YES:
+                    self.execute_batch_operation(batch_op)
+        
+        dlg.Destroy()
+    
+    def execute_batch_operation(self, batch_op):
+        """Execute the batch operation."""
+        # This would integrate with the existing reencode functionality
+        # For now, show a placeholder message
+        wx.MessageBox(f"Batch operation would process {len(batch_op.files)} files.\n\n"
+                     "This functionality will be integrated with the main reencode system.",
+                     "Batch Operation", wx.OK | wx.ICON_INFORMATION)
+
+
+class BatchOutputDialog(wx.Dialog):
+    """Dialog for configuring batch operation output options."""
+    
+    def __init__(self, parent, batch_operation):
+        super().__init__(parent, title="Batch Output Options", 
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.batch_operation = batch_operation
+        
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Output suffix
+        suffix_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        suffix_sizer.Add(wx.StaticText(self, label="Output Suffix:"), 0, 
+                        wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.suffix_ctrl = wx.TextCtrl(self, value="_processed")
+        suffix_sizer.Add(self.suffix_ctrl, 1, wx.ALL | wx.EXPAND, 5)
+        
+        # Output extension
+        ext_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ext_sizer.Add(wx.StaticText(self, label="Output Extension:"), 0, 
+                     wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.ext_choice = wx.ComboBox(self, choices=list(VIDEO_EXTENSIONS), style=wx.CB_READONLY)
+        self.ext_choice.SetSelection(0)
+        ext_sizer.Add(self.ext_choice, 1, wx.ALL | wx.EXPAND, 5)
+        
+        # Output directory
+        dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.same_dir_radio = wx.RadioButton(self, label="Same as input files", style=wx.RB_GROUP)
+        self.same_dir_radio.SetValue(True)
+        self.custom_dir_radio = wx.RadioButton(self, label="Custom directory:")
+        self.dir_ctrl = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.dir_button = wx.Button(self, label="Browse...")
+        self.dir_button.Bind(wx.EVT_BUTTON, self.OnBrowseOutputDir)
+        
+        dir_sizer.Add(self.custom_dir_radio, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        dir_sizer.Add(self.dir_ctrl, 1, wx.ALL | wx.EXPAND, 5)
+        dir_sizer.Add(self.dir_button, 0, wx.ALL, 5)
+        
+        # Options
+        self.overwrite_check = wx.CheckBox(self, label="Overwrite existing files")
+        self.dry_run_check = wx.CheckBox(self, label="Dry run (preview only)")
+        
+        # Dialog buttons
+        button_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        
+        # Layout
+        sizer.Add(suffix_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(ext_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(self.same_dir_radio, 0, wx.ALL, 5)
+        sizer.Add(dir_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(self.overwrite_check, 0, wx.ALL, 5)
+        sizer.Add(self.dry_run_check, 0, wx.ALL, 5)
+        sizer.Add(button_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        self.SetSizer(sizer)
+        self.Fit()
+        
+        # Bind events
+        self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
+    
+    def OnBrowseOutputDir(self, event):
+        """Browse for output directory."""
+        dlg = wx.DirDialog(self, "Choose output directory:")
+        if dlg.ShowModal() == wx.ID_OK:
+            self.dir_ctrl.SetValue(dlg.GetPath())
+            self.custom_dir_radio.SetValue(True)
+        dlg.Destroy()
+    
+    def OnOK(self, event):
+        """Handle OK button - apply settings to batch operation."""
+        self.batch_operation.set_output_options(
+            suffix=self.suffix_ctrl.GetValue(),
+            extension=list(VIDEO_EXTENSIONS)[self.ext_choice.GetSelection()],
+            output_directory=pathlib.Path(self.dir_ctrl.GetValue()) if self.custom_dir_radio.GetValue() else None
+        )
+        self.batch_operation.set_overwrite_policy(self.overwrite_check.GetValue())
+        self.batch_operation.set_dry_run(self.dry_run_check.GetValue())
+        
+        event.Skip()  # Close dialog
+
+
+class OutputOptionsDialog(wx.Dialog):
+    """Dialog for configuring advanced output options."""
+    
+    def __init__(self, parent, output_generator: OutputPathGenerator):
+        super().__init__(parent, title="Advanced Output Options", 
+                        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.output_generator = output_generator
+        
+        # Create a notebook for different option categories
+        notebook = wx.Notebook(self)
+        
+        # Basic Options Tab
+        basic_panel = wx.Panel(notebook)
+        self.create_basic_options(basic_panel)
+        notebook.AddPage(basic_panel, "Basic Options")
+        
+        # Directory Options Tab
+        directory_panel = wx.Panel(notebook)
+        self.create_directory_options(directory_panel)
+        notebook.AddPage(directory_panel, "Directory Options")
+        
+        # Naming Options Tab
+        naming_panel = wx.Panel(notebook)
+        self.create_naming_options(naming_panel)
+        notebook.AddPage(naming_panel, "Naming Options")
+        
+        # Preview Tab
+        preview_panel = wx.Panel(notebook)
+        self.create_preview_options(preview_panel)
+        notebook.AddPage(preview_panel, "Preview")
+        
+        # Dialog buttons
+        button_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        
+        # Add info text about main screen sync at the bottom
+        info_text = wx.StaticText(self, label="Note: Basic options (Suffix, Extension, Append Resolution) are synced with the main screen controls.")
+        info_text.SetFont(info_text.GetFont().Italic())
+        
+        # Main layout
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 10)
+        main_sizer.Add(info_text, 0, wx.ALL | wx.EXPAND, 10)
+        main_sizer.Add(button_sizer, 0, wx.EXPAND | wx.ALL, 10)
+        
+        self.SetSizer(main_sizer)
+        self.SetSize((720, 680))
+        self.SetMinSize((680, 650))
+        
+        # Bind events
+        self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
+        
+        # Load current settings
+        self.load_current_settings()
+    
+    def create_basic_options(self, panel):
+        """Create basic output options."""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Add some top padding
+        sizer.AddSpacer(10)
+        
+        # Output preset selection
+        preset_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Output Presets")
+        self.preset_choice = wx.ComboBox(panel, choices=OUTPUT_PRESETS, style=wx.CB_READONLY)
+        self.preset_choice.Bind(wx.EVT_COMBOBOX, self.OnPresetSelected)
+        preset_box.Add(self.preset_choice, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Basic naming options
+        naming_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Basic Naming")
+        
+        suffix_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        suffix_sizer.Add(wx.StaticText(panel, label="Suffix:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.suffix_ctrl = wx.TextCtrl(panel, value="_encoded")
+        suffix_sizer.Add(self.suffix_ctrl, 1, wx.ALL | wx.EXPAND, 5)
+        
+        ext_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ext_sizer.Add(wx.StaticText(panel, label="Extension:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.extension_choice = wx.ComboBox(panel, choices=list(VIDEO_EXTENSIONS), style=wx.CB_READONLY)
+        ext_sizer.Add(self.extension_choice, 1, wx.ALL | wx.EXPAND, 5)
+        
+        naming_box.Add(suffix_sizer, 0, wx.EXPAND | wx.ALL, 3)
+        naming_box.Add(ext_sizer, 0, wx.EXPAND | wx.ALL, 3)
+        
+        # Options checkboxes
+        options_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Include in Filename")
+        self.include_resolution_check = wx.CheckBox(panel, label="Include resolution (e.g., 1920x1080)")
+        self.include_codec_check = wx.CheckBox(panel, label="Include video codec")
+        self.include_quality_check = wx.CheckBox(panel, label="Include quality setting (CRF)")
+        self.include_date_check = wx.CheckBox(panel, label="Include date")
+        
+        options_box.Add(self.include_resolution_check, 0, wx.ALL, 5)
+        options_box.Add(self.include_codec_check, 0, wx.ALL, 5)
+        options_box.Add(self.include_quality_check, 0, wx.ALL, 5)
+        options_box.Add(self.include_date_check, 0, wx.ALL, 5)
+        
+        # File handling
+        handling_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "File Handling")
+        self.overwrite_choice = wx.RadioButton(panel, label="Overwrite existing files", style=wx.RB_GROUP)
+        self.skip_choice = wx.RadioButton(panel, label="Skip existing files")
+        self.increment_choice = wx.RadioButton(panel, label="Auto-increment filename for existing files")
+        
+        handling_box.Add(self.overwrite_choice, 0, wx.ALL, 5)
+        handling_box.Add(self.skip_choice, 0, wx.ALL, 5)
+        handling_box.Add(self.increment_choice, 0, wx.ALL, 5)
+        
+        # Layout
+        sizer.Add(preset_box, 0, wx.EXPAND | wx.ALL, 8)
+        sizer.Add(naming_box, 0, wx.EXPAND | wx.ALL, 8)
+        sizer.Add(options_box, 0, wx.EXPAND | wx.ALL, 8)
+        sizer.Add(handling_box, 0, wx.EXPAND | wx.ALL, 8)
+        
+        # Add some bottom padding
+        sizer.AddSpacer(10)
+        
+        panel.SetSizer(sizer)
+    
+    def create_directory_options(self, panel):
+        """Create directory and organization options."""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Output directory selection
+        dir_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Output Directory")
+        
+        self.same_dir_radio = wx.RadioButton(panel, label="Same as input files", style=wx.RB_GROUP)
+        self.custom_dir_radio = wx.RadioButton(panel, label="Custom directory:")
+        
+        custom_dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.custom_dir_ctrl = wx.TextCtrl(panel, style=wx.TE_READONLY)
+        self.browse_dir_button = wx.Button(panel, label="Browse...")
+        self.browse_dir_button.Bind(wx.EVT_BUTTON, self.OnBrowseDirectory)
+        
+        custom_dir_sizer.Add(self.custom_dir_ctrl, 1, wx.ALL | wx.EXPAND, 5)
+        custom_dir_sizer.Add(self.browse_dir_button, 0, wx.ALL, 5)
+        
+        dir_box.Add(self.same_dir_radio, 0, wx.ALL, 5)
+        dir_box.Add(self.custom_dir_radio, 0, wx.ALL, 5)
+        dir_box.Add(custom_dir_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Subdirectory options
+        subdir_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Subdirectory Organization")
+        
+        self.no_subdir_radio = wx.RadioButton(panel, label="No subdirectory", style=wx.RB_GROUP)
+        self.encoded_subdir_radio = wx.RadioButton(panel, label="Create 'encoded' subdirectory")
+        self.codec_subdir_radio = wx.RadioButton(panel, label="Organize by codec")
+        self.date_subdir_radio = wx.RadioButton(panel, label="Organize by date")
+        self.custom_subdir_radio = wx.RadioButton(panel, label="Custom subdirectory pattern:")
+        
+        self.custom_subdir_ctrl = wx.TextCtrl(panel, value="")
+        self.custom_subdir_ctrl.SetToolTip("Use placeholders like {codec}, {date}, {resolution}")
+        
+        subdir_box.Add(self.no_subdir_radio, 0, wx.ALL, 5)
+        subdir_box.Add(self.encoded_subdir_radio, 0, wx.ALL, 5)
+        subdir_box.Add(self.codec_subdir_radio, 0, wx.ALL, 5)
+        subdir_box.Add(self.date_subdir_radio, 0, wx.ALL, 5)
+        subdir_box.Add(self.custom_subdir_radio, 0, wx.ALL, 5)
+        subdir_box.Add(self.custom_subdir_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Layout
+        sizer.Add(dir_box, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(subdir_box, 0, wx.EXPAND | wx.ALL, 5)
+        
+        panel.SetSizer(sizer)
+    
+    def create_naming_options(self, panel):
+        """Create advanced filename pattern options."""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Custom filename pattern
+        pattern_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Custom Filename Pattern")
+        
+        self.pattern_ctrl = wx.TextCtrl(panel, value="{stem}{suffix}{extension}")
+        pattern_box.Add(wx.StaticText(panel, label="Filename Pattern:"), 0, wx.ALL, 5)
+        pattern_box.Add(self.pattern_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Pattern help
+        help_text = """Available placeholders:
+{stem} - Original filename without extension
+{suffix} - Custom suffix
+{extension} - Output file extension
+{resolution} - Video resolution (e.g., 1920x1080)
+{width} - Video width
+{height} - Video height
+{codec} - Video codec name
+{quality} - Quality setting (CRF value)
+{date} - Current date (YYYY-MM-DD)
+{time} - Current time (HHMMSS)
+{duration} - Video duration in seconds
+{size_mb} - Original file size in MB
+
+Example: {stem}_{codec}_crf{quality}{extension}
+Result: movie_h265_crf23.mkv"""
+        
+        help_label = wx.StaticText(panel, label=help_text)
+        help_label.SetFont(wx.Font(8, wx.FONTFAMILY_MODERN, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        
+        pattern_box.Add(help_label, 0, wx.ALL, 5)
+        
+        sizer.Add(pattern_box, 1, wx.EXPAND | wx.ALL, 5)
+        panel.SetSizer(sizer)
+    
+    def create_preview_options(self, panel):
+        """Create preview tab to show example output paths."""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Sample input files for preview
+        preview_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Preview Output Paths")
+        
+        self.preview_button = wx.Button(panel, label="Update Preview")
+        self.preview_button.Bind(wx.EVT_BUTTON, self.OnUpdatePreview)
+        
+        self.preview_list = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.preview_list.SetFont(wx.Font(9, wx.FONTFAMILY_MODERN, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        
+        preview_box.Add(self.preview_button, 0, wx.ALL, 5)
+        preview_box.Add(self.preview_list, 1, wx.EXPAND | wx.ALL, 5)
+        
+        sizer.Add(preview_box, 1, wx.EXPAND | wx.ALL, 5)
+        panel.SetSizer(sizer)
+    
+    def load_current_settings(self):
+        """Load current settings from the output generator."""
+        self.suffix_ctrl.SetValue(self.output_generator.suffix)
+        
+        # Find matching extension
+        try:
+            extension_list = list(VIDEO_EXTENSIONS)
+            if self.output_generator.extension in extension_list:
+                ext_index = extension_list.index(self.output_generator.extension)
+                self.extension_choice.SetSelection(ext_index)
+        except (ValueError, AttributeError):
+            pass
+        
+        # Set checkboxes
+        self.include_resolution_check.SetValue(self.output_generator.include_resolution)
+        self.include_codec_check.SetValue(self.output_generator.include_codec)
+        self.include_quality_check.SetValue(self.output_generator.include_quality)
+        self.include_date_check.SetValue(self.output_generator.include_date)
+        
+        # Set overwrite policy
+        if self.output_generator.overwrite_policy == "overwrite":
+            self.overwrite_choice.SetValue(True)
+        elif self.output_generator.overwrite_policy == "skip":
+            self.skip_choice.SetValue(True)
+        else:
+            self.increment_choice.SetValue(True)
+        
+        # Set directory options
+        if self.output_generator.output_directory:
+            self.custom_dir_radio.SetValue(True)
+            self.custom_dir_ctrl.SetValue(str(self.output_generator.output_directory))
+        else:
+            self.same_dir_radio.SetValue(True)
+        
+        # Set subdirectory options
+        if not self.output_generator.subdirectory_pattern:
+            self.no_subdir_radio.SetValue(True)
+        elif self.output_generator.subdirectory_pattern == "encoded":
+            self.encoded_subdir_radio.SetValue(True)
+        elif self.output_generator.subdirectory_pattern == "{codec}":
+            self.codec_subdir_radio.SetValue(True)
+        elif self.output_generator.subdirectory_pattern == "{date}":
+            self.date_subdir_radio.SetValue(True)
+        else:
+            self.custom_subdir_radio.SetValue(True)
+            self.custom_subdir_ctrl.SetValue(self.output_generator.subdirectory_pattern)
+        
+        # Set filename pattern
+        self.pattern_ctrl.SetValue(self.output_generator.filename_pattern)
+    
+    def OnPresetSelected(self, event):
+        """Handle output preset selection."""
+        preset_name = self.preset_choice.GetStringSelection()
+        if preset_name:
+            try:
+                self.output_generator = OutputPreset.get_preset(preset_name)
+                self.load_current_settings()
+            except ValueError as e:
+                wx.MessageBox(f"Error loading preset: {e}", "Preset Error", wx.OK | wx.ICON_ERROR)
+    
+    def OnBrowseDirectory(self, event):
+        """Browse for custom output directory."""
+        dlg = wx.DirDialog(self, "Choose output directory:")
+        if dlg.ShowModal() == wx.ID_OK:
+            self.custom_dir_ctrl.SetValue(dlg.GetPath())
+            self.custom_dir_radio.SetValue(True)
+        dlg.Destroy()
+    
+    def OnUpdatePreview(self, event):
+        """Update the preview with sample output paths."""
+        # Apply current settings to generator
+        self.apply_settings_to_generator()
+        
+        # Create sample input files for preview
+        sample_files = [
+            pathlib.Path("/path/to/movies/Action Movie (2023).mkv"),
+            pathlib.Path("/path/to/series/Show S01E01.mp4"),
+            pathlib.Path("/path/to/home/vacation_video.avi")
+        ]
+        
+        # Create sample encoding settings
+        sample_settings = {
+            "video_codec": "libx265",
+            "audio_codec": "aac",
+            "use_crf": True,
+            "crf_value": 23
+        }
+        
+        # Generate preview
+        preview_text = "Preview Output Paths:\n\n"
+        
+        for input_file in sample_files:
+            try:
+                output_path = self.output_generator.generate_output_path(
+                    input_file, None, sample_settings)
+                preview_text += f"Input:  {input_file}\n"
+                preview_text += f"Output: {output_path}\n\n"
+            except Exception as e:
+                preview_text += f"Input:  {input_file}\n"
+                preview_text += f"Error:  {e}\n\n"
+        
+        self.preview_list.SetValue(preview_text)
+    
+    def apply_settings_to_generator(self):
+        """Apply dialog settings to the output generator."""
+        # Basic naming
+        self.output_generator.set_naming_options(
+            suffix=self.suffix_ctrl.GetValue(),
+            extension=list(VIDEO_EXTENSIONS)[self.extension_choice.GetSelection()],
+            include_resolution=self.include_resolution_check.GetValue(),
+            include_codec=self.include_codec_check.GetValue(),
+            include_quality=self.include_quality_check.GetValue(),
+            include_date=self.include_date_check.GetValue()
+        )
+        
+        # Overwrite policy
+        if self.overwrite_choice.GetValue():
+            policy = "overwrite"
+        elif self.skip_choice.GetValue():
+            policy = "skip"
+        else:
+            policy = "increment"
+        self.output_generator.set_overwrite_policy(policy)
+        
+        # Output directory
+        if self.custom_dir_radio.GetValue():
+            custom_dir = self.custom_dir_ctrl.GetValue().strip()
+            if custom_dir:
+                self.output_generator.set_output_directory(pathlib.Path(custom_dir))
+        else:
+            self.output_generator.set_output_directory(None)
+        
+        # Subdirectory pattern
+        if self.no_subdir_radio.GetValue():
+            pattern = ""
+        elif self.encoded_subdir_radio.GetValue():
+            pattern = "encoded"
+        elif self.codec_subdir_radio.GetValue():
+            pattern = "{codec}"
+        elif self.date_subdir_radio.GetValue():
+            pattern = "{date}"
+        else:
+            pattern = self.custom_subdir_ctrl.GetValue()
+        
+        self.output_generator.set_subdirectory_pattern(pattern)
+        
+        # Filename pattern
+        self.output_generator.set_filename_pattern(self.pattern_ctrl.GetValue())
+    
+    def OnOK(self, event):
+        """Handle OK button - apply all settings."""
+        try:
+            self.apply_settings_to_generator()
+            event.Skip()  # Close dialog
+        except Exception as e:
+            wx.MessageBox(f"Error applying settings: {e}", "Configuration Error", wx.OK | wx.ICON_ERROR)
+
+
+class PresetManagerDialog(wx.Dialog):
+    """Dialog for managing presets."""
+    
+    def __init__(self, parent, preset_manager):
+        super().__init__(parent, title="Manage Presets", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.preset_manager = preset_manager
+        
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Preset list
+        list_label = wx.StaticText(self, label="Available Presets:")
+        self.preset_list = wx.ListBox(self, style=wx.LB_SINGLE)
+        self.refresh_preset_list()
+        
+        # Buttons
+        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.rename_button = wx.Button(self, label="Rename")
+        self.rename_button.Bind(wx.EVT_BUTTON, self.OnRename)
+        
+        self.delete_button = wx.Button(self, label="Delete")
+        self.delete_button.Bind(wx.EVT_BUTTON, self.OnDelete)
+        
+        self.export_button = wx.Button(self, label="Export...")
+        self.export_button.Bind(wx.EVT_BUTTON, self.OnExport)
+        
+        self.import_button = wx.Button(self, label="Import...")
+        self.import_button.Bind(wx.EVT_BUTTON, self.OnImport)
+        
+        button_sizer.Add(self.rename_button, 0, wx.ALL, 5)
+        button_sizer.Add(self.delete_button, 0, wx.ALL, 5)
+        button_sizer.Add(self.export_button, 0, wx.ALL, 5)
+        button_sizer.Add(self.import_button, 0, wx.ALL, 5)
+        
+        # Dialog buttons
+        dialog_buttons = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        
+        # Layout
+        sizer.Add(list_label, 0, wx.ALL, 5)
+        sizer.Add(self.preset_list, 1, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(button_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+        sizer.Add(dialog_buttons, 0, wx.EXPAND | wx.ALL, 5)
+        
+        self.SetSizer(sizer)
+        self.SetSize((400, 300))
+        
+        # Enable/disable buttons based on selection
+        self.preset_list.Bind(wx.EVT_LISTBOX, self.OnSelectionChanged)
+        self.OnSelectionChanged(None)
+    
+    def refresh_preset_list(self):
+        """Refresh the preset list."""
+        self.preset_list.Clear()
+        if self.preset_manager:
+            preset_names = list(self.preset_manager.get_preset_names())
+            self.preset_list.AppendItems(preset_names)
+    
+    def OnSelectionChanged(self, event):
+        """Handle selection changes in the preset list."""
+        has_selection = self.preset_list.GetSelection() != wx.NOT_FOUND
+        self.rename_button.Enable(has_selection)
+        self.delete_button.Enable(has_selection)
+        self.export_button.Enable(has_selection)
+    
+    def OnRename(self, event):
+        """Handle renaming a preset."""
+        selection = self.preset_list.GetSelection()
+        if selection == wx.NOT_FOUND:
+            return
+        
+        old_name = self.preset_list.GetStringSelection()
+        dlg = wx.TextEntryDialog(self, f"Enter new name for '{old_name}':", "Rename Preset", old_name)
+        
+        if dlg.ShowModal() == wx.ID_OK:
+            new_name = dlg.GetValue().strip()
+            if new_name and new_name != old_name:
+                try:
+                    self.preset_manager.rename_preset(old_name, new_name)
+                    self.refresh_preset_list()
+                    # Select the renamed preset
+                    for i in range(self.preset_list.GetCount()):
+                        if self.preset_list.GetString(i) == new_name:
+                            self.preset_list.SetSelection(i)
+                            break
+                except PresetError as e:
+                    wx.MessageBox(f"Error renaming preset: {e}", "Rename Error", wx.OK | wx.ICON_ERROR)
+        dlg.Destroy()
+    
+    def OnDelete(self, event):
+        """Handle deleting a preset."""
+        selection = self.preset_list.GetSelection()
+        if selection == wx.NOT_FOUND:
+            return
+        
+        preset_name = self.preset_list.GetStringSelection()
+        if wx.MessageBox(f"Are you sure you want to delete the preset '{preset_name}'?", 
+                        "Confirm Delete", wx.YES_NO | wx.ICON_QUESTION) == wx.YES:
+            try:
+                self.preset_manager.delete_preset(preset_name)
+                self.refresh_preset_list()
+            except PresetError as e:
+                wx.MessageBox(f"Error deleting preset: {e}", "Delete Error", wx.OK | wx.ICON_ERROR)
+    
+    def OnExport(self, event):
+        """Handle exporting a preset."""
+        selection = self.preset_list.GetSelection()
+        if selection == wx.NOT_FOUND:
+            return
+        
+        preset_name = self.preset_list.GetStringSelection()
+        wildcard = "JSON files (*.json)|*.json"
+        dlg = wx.FileDialog(self, f"Export preset '{preset_name}'", 
+                           defaultFile=f"{preset_name}.json",
+                           wildcard=wildcard, style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        
+        if dlg.ShowModal() == wx.ID_OK:
+            try:
+                self.preset_manager.export_preset(preset_name, dlg.GetPath())
+                wx.MessageBox(f"Preset '{preset_name}' exported successfully!", "Export Complete",
+                            wx.OK | wx.ICON_INFORMATION)
+            except PresetError as e:
+                wx.MessageBox(f"Error exporting preset: {e}", "Export Error", wx.OK | wx.ICON_ERROR)
+        dlg.Destroy()
+    
+    def OnImport(self, event):
+        """Handle importing a preset."""
+        wildcard = "JSON files (*.json)|*.json"
+        dlg = wx.FileDialog(self, "Import preset", wildcard=wildcard, style=wx.FD_OPEN)
+        
+        if dlg.ShowModal() == wx.ID_OK:
+            try:
+                imported_name = self.preset_manager.import_preset(dlg.GetPath())
+                self.refresh_preset_list()
+                # Select the imported preset
+                for i in range(self.preset_list.GetCount()):
+                    if self.preset_list.GetString(i) == imported_name:
+                        self.preset_list.SetSelection(i)
+                        break
+                wx.MessageBox(f"Preset '{imported_name}' imported successfully!", "Import Complete",
+                            wx.OK | wx.ICON_INFORMATION)
+            except PresetError as e:
+                wx.MessageBox(f"Error importing preset: {e}", "Import Error", wx.OK | wx.ICON_ERROR)
+        dlg.Destroy()
+
 
 class SettingsPanel(wx.Panel):
     def __init__(self, parent, app_state):
