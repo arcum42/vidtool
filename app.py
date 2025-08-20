@@ -11,9 +11,13 @@ from typing import Optional, List, Dict, Any
 import modules.video as video
 from modules.video import VIDEO_EXTENSIONS, VIDEO_CODECS, AUDIO_CODECS
 from modules.video import VideoProcessingError, FFmpegNotFoundError, VideoFileError
-from modules import video
 from modules.presets import PresetManager, PresetError
 from modules.output import OutputPathGenerator, OutputPreset, OUTPUT_PRESETS
+from modules.logging_config import get_logger, setup_logging, log_error_with_context
+
+# Initialize logging system
+setup_logging()
+logger = get_logger('app')
 
 
 class AppState:
@@ -34,12 +38,30 @@ class AppState:
             try:
                 with open(config_file, "r") as f:
                     self.config = json.load(f)
-                    print("Config loaded:", self.config)
+                    logger.info("Configuration loaded successfully")
+                    logger.debug(f"Config contents: {self.config}")
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Error loading config: {e}. Using default settings.")
+                logger.error(f"Error loading config: {e}. Using default settings.")
                 self.config = {}
         else:
-            print("Config file not found. Using default settings.")
+            logger.info("Config file not found. Using default settings.")
+            
+        # Configure logging level based on config
+        log_level = self.config.get("log_level", "INFO")
+        from modules.logging_config import set_log_level
+        import logging
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR
+        }
+        if log_level in level_map:
+            set_log_level(level_map[log_level])
+            logger.info(f"Log level set to {log_level}")
+        else:
+            set_log_level(logging.INFO)
+            logger.warning(f"Unknown log level '{log_level}', defaulting to INFO")
             
         # Initialize preset manager
         self.preset_manager = PresetManager()
@@ -143,6 +165,7 @@ class VideoList(wx.ListCtrl):
         self.main_frame = main_frame
         self.vid_info_panel = vid_info_panel
         self.info_cache = {}  # filename (str) -> video.info object
+        self.error_files = set()  # Track files that previously failed processing
 
         for idx, (label, width) in enumerate(self.COLS):
             self.InsertColumn(idx, label)
@@ -282,11 +305,26 @@ class VideoList(wx.ListCtrl):
             import traceback
             traceback.print_exc()
 
+    def clear_error_cache(self):
+        """Clear the cache of files that previously failed processing."""
+        self.error_files.clear()
+        if self.main_frame:
+            self.main_frame.SetStatusText("Error file cache cleared - failed files will be retried on next refresh")
+    
+    def force_refresh_all(self):
+        """Force a complete refresh that re-processes all files, including previously failed ones."""
+        self.info_cache.clear()
+        self.error_files.clear()
+        self.refresh()
+        if self.main_frame:
+            self.main_frame.SetStatusText("Forcing complete refresh - all files will be re-processed")
+
     def refresh(self, completion_callback=None):
         self.app_state.video_list = []
 
         self.DeleteAllItems()
-        self.info_cache = {}
+        # Don't clear the cache - preserve existing info
+        # self.info_cache = {}
 
         if not self.app_state.working_dir:
             if completion_callback:
@@ -296,8 +334,10 @@ class VideoList(wx.ListCtrl):
         wd = self.app_state.working_dir  # capture current working_dir for thread safety
         def scan_and_update():
             files = []
-            info_cache = {}
+            # Preserve existing cache and only update for new/changed files
+            info_cache = self.info_cache.copy()
             errors = []
+            new_errors = []  # Track only new errors for this refresh
             
             try:
                 # Check FFmpeg availability once at the start
@@ -311,14 +351,29 @@ class VideoList(wx.ListCtrl):
                 if p.suffix in VIDEO_EXTENSIONS:
                     abs_path = str(p.resolve())
                     files.append(p.resolve())
-                    try:
-                        info_cache[abs_path] = video.info(abs_path)
-                    except (VideoProcessingError, VideoFileError) as e:
-                        errors.append(f"{p.name}: {e}")
-                        print(f"Failed to get info for {abs_path}: {e}")
-                    except Exception as e:
-                        errors.append(f"{p.name}: Unexpected error - {e}")
-                        print(f"Unexpected error processing {abs_path}: {e}")
+                    
+                    # Only process files that aren't already in cache
+                    if abs_path not in info_cache:
+                        # Skip files that previously failed unless forced to retry
+                        if abs_path in self.error_files:
+                            # File previously failed, mark as error but don't retry
+                            errors.append(f"{p.name}: Previously failed processing")
+                            continue
+                            
+                        try:
+                            info_cache[abs_path] = video.info(abs_path)
+                        except (VideoProcessingError, VideoFileError) as e:
+                            error_msg = f"{p.name}: {e}"
+                            errors.append(error_msg)
+                            new_errors.append(error_msg)
+                            self.error_files.add(abs_path)  # Remember this file failed
+                            logger.warning(f"Failed to get info for {abs_path}: {e}")
+                        except Exception as e:
+                            error_msg = f"{p.name}: Unexpected error - {e}"
+                            errors.append(error_msg)
+                            new_errors.append(error_msg)
+                            self.error_files.add(abs_path)  # Remember this file failed
+                            logger.error(f"Unexpected error processing {abs_path}: {e}")
 
             def update_ui():
                 if self.app_state.working_dir != wd:
@@ -360,18 +415,28 @@ class VideoList(wx.ListCtrl):
                 self.info_cache = info_cache
                 self.app_state.video_list = []
                 
-                # Show error summary if there were issues
-                if errors and self.main_frame:
-                    error_count = len(errors)
-                    status_msg = f"Loaded {len(files)} files ({error_count} errors)"
+                # Show error summary only for NEW errors in this refresh
+                if new_errors and self.main_frame:
+                    error_count = len(new_errors)
+                    total_error_count = len(errors)
+                    
+                    if total_error_count > len(new_errors):
+                        status_msg = f"Loaded {len(files)} files ({error_count} new errors, {total_error_count} total errors)"
+                    else:
+                        status_msg = f"Loaded {len(files)} files ({error_count} errors)"
                     self.main_frame.SetStatusText(status_msg)
                     
                     if error_count <= 5:  # Show details for few errors
-                        error_msg = f"Errors processing {error_count} files:\n\n" + "\n".join(errors)
+                        error_msg = f"New errors processing {error_count} files:\n\n" + "\n".join(new_errors)
                     else:  # Summarize for many errors
-                        error_msg = f"Errors processing {error_count} files. First 5:\n\n" + "\n".join(errors[:5]) + f"\n\n... and {error_count - 5} more"
+                        error_msg = f"New errors processing {error_count} files. First 5:\n\n" + "\n".join(new_errors[:5]) + f"\n\n... and {error_count - 5} more"
                     
                     wx.CallAfter(lambda: wx.MessageBox(error_msg, "Video Processing Errors", wx.OK | wx.ICON_WARNING))
+                elif errors and not new_errors and self.main_frame:
+                    # Only old errors, just update status
+                    error_count = len(errors)
+                    status_msg = f"Loaded {len(files)} files ({error_count} known errors)"
+                    self.main_frame.SetStatusText(status_msg)
 
                 # Call the completion callback if provided
                 if completion_callback:
@@ -414,6 +479,8 @@ class MyFrame(wx.Frame):
 
         self.refresh_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_REDO, wx.ART_BUTTON))
         self.refresh_button.Bind(wx.EVT_BUTTON, self.OnRefresh)
+        self.refresh_button.Bind(wx.EVT_RIGHT_UP, self.OnRefreshMenu)  # Right-click for menu
+        self.refresh_button.SetToolTip("Refresh file list (right-click for options)")
 
         self.up_button = wx.BitmapButton(main_panel, bitmap=wx.ArtProvider.GetBitmap(wx.ART_GO_TO_PARENT, wx.ART_BUTTON))
         self.up_button.Bind(wx.EVT_BUTTON, self.OnGoUp)
@@ -497,6 +564,31 @@ class MyFrame(wx.Frame):
         self.listbox.refresh()
         self.SetStatusText("File list refreshed.")
 
+    def OnRefreshMenu(self, event):
+        """Show refresh options menu on right-click."""
+        menu = wx.Menu()
+        
+        normal_refresh = menu.Append(wx.ID_ANY, "Normal Refresh", "Refresh list (preserve cached info)")
+        force_refresh = menu.Append(wx.ID_ANY, "Force Complete Refresh", "Re-process all files (clear cache)")
+        clear_errors = menu.Append(wx.ID_ANY, "Clear Error Cache", "Clear failed files cache")
+        
+        # Bind menu events
+        self.Bind(wx.EVT_MENU, self.OnRefresh, normal_refresh)
+        self.Bind(wx.EVT_MENU, self.OnForceRefresh, force_refresh)
+        self.Bind(wx.EVT_MENU, self.OnClearErrorCache, clear_errors)
+        
+        # Show menu at mouse position
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def OnForceRefresh(self, event):
+        """Force a complete refresh that re-processes all files."""
+        self.listbox.force_refresh_all()
+
+    def OnClearErrorCache(self, event):
+        """Clear the cache of files that previously failed processing."""
+        self.listbox.clear_error_cache()
+
     def OnGoUp(self, event):
         if self.app_state.working_dir is not None:
             self.app_state.working_dir = self.app_state.working_dir.parent
@@ -533,7 +625,7 @@ class MyFrame(wx.Frame):
         self.Destroy()
 
     def OnPlay(self, event):
-        print("Play button clicked")
+        logger.debug("Play button clicked")
         
         if not self.app_state.video_list:
             wx.MessageBox("No videos selected for playback.", "No Selection", wx.OK | wx.ICON_INFORMATION)
@@ -550,7 +642,7 @@ class MyFrame(wx.Frame):
                 
             for vid in self.app_state.video_list:
                 try:
-                    print(f"Playing: {vid}")
+                    logger.info(f"Playing: {vid}")
                     video.play(vid)
                 except (VideoProcessingError, VideoFileError) as e:
                     wx.CallAfter(lambda v=vid, err=e: wx.MessageBox(f"Error playing {pathlib.Path(v).name}:\n\n{err}", 
@@ -920,7 +1012,7 @@ class ReencodePane(wx.CollapsiblePane):
                 break
                 
             video_name = pathlib.Path(video_file).name
-            print(f"Encoding video_file: {video_file}")
+            logger.info(f"Starting encoding for: {video_file}")
             
             try:
                 info = video.info(video_file)
@@ -948,7 +1040,7 @@ class ReencodePane(wx.CollapsiblePane):
                     encode_job.add_output(str(output_path))
                 except Exception as e:
                     # Fallback to original method if output generator fails
-                    print(f"Output generator failed, using fallback: {e}")
+                    logger.warning(f"Output generator failed, using fallback: {e}")
                     encode_job.add_output_from_input(file_append=output_suffix, file_extension=options["output_extension"])
 
                 # Get the output filename for display
@@ -961,13 +1053,13 @@ class ReencodePane(wx.CollapsiblePane):
                 # Check if output file already exists and handle according to policy
                 if pathlib.Path(encode_job.output).exists():
                     if self.output_generator.overwrite_policy == "skip":
-                        print(f"Output file '{encode_job.output}' already exists. Skipping.")
+                        logger.info(f"Output file '{encode_job.output}' already exists. Skipping.")
                         errors.append(f"{video_name}: Output file already exists")
                         progress += 1
                         wx.CallAfter(self.total_progress.SetValue, progress)
                         continue
                     elif self.output_generator.overwrite_policy == "overwrite":
-                        print(f"Output file '{encode_job.output}' already exists. Will overwrite.")
+                        logger.info(f"Output file '{encode_job.output}' already exists. Will overwrite.")
                     # increment policy is handled by the output generator itself
 
                 # Configure encoding options
@@ -980,14 +1072,14 @@ class ReencodePane(wx.CollapsiblePane):
                 elif options["subtitles"] == "All":
                     encode_job.copy_subtitles()
                 elif options["subtitles"] == "srt":
-                    print("Adding srt file")
+                    logger.debug("Adding srt file")
                     srt_file = pathlib.Path(video_file).with_suffix(".srt")
-                    print(f"Adding srt file: {srt_file}")
+                    logger.debug(f"Looking for srt file: {srt_file}")
                     if srt_file.exists():
-                        print(f"Exists. Adding srt file: {srt_file}")
+                        logger.info(f"Adding srt file: {srt_file}")
                         encode_job.add_input(str(srt_file))
                     else:
-                        print(f"Warning: {srt_file} does not exist. Skipping.")
+                        logger.warning(f"SRT file {srt_file} does not exist. Skipping.")
                         
                 if options["no_data"]:
                     encode_job.exclude_data()
@@ -1019,7 +1111,7 @@ class ReencodePane(wx.CollapsiblePane):
 
                 # Define output callback to print to console
                 def console_output_callback(line):
-                    print(line)
+                    logger.debug(f"FFmpeg output: {line}")
 
                 # Perform the encoding
                 encode_result = encode_job.reencode(output_callback=console_output_callback)
@@ -1035,17 +1127,17 @@ class ReencodePane(wx.CollapsiblePane):
                     if hasattr(top_frame, "listbox"):
                         def refresh_and_recheck():
                             # First uncheck the completed video to update the video list
-                            print(f"Unchecking completed video: {pathlib.Path(completed_video_file).name}")
+                            logger.debug(f"Unchecking completed video: {pathlib.Path(completed_video_file).name}")
                             top_frame.listbox.uncheck_video_by_path(completed_video_file)
                             
                             # Get the updated list of selected videos (should exclude the just-processed one)
                             remaining_videos = list(self.app_state.video_list)  # Make a copy
-                            print(f"Current video_list after unchecking: {[pathlib.Path(v).name for v in remaining_videos]}")
-                            print(f"Preserving selection for {len(remaining_videos)} remaining videos: {[pathlib.Path(v).name for v in remaining_videos]}")
+                            logger.debug(f"Current video_list after unchecking: {[pathlib.Path(v).name for v in remaining_videos]}")
+                            logger.debug(f"Preserving selection for {len(remaining_videos)} remaining videos: {[pathlib.Path(v).name for v in remaining_videos]}")
                             
                             # Refresh the list to show the new encoded file
                             def on_refresh_complete():
-                                print(f"Refresh completed, re-checking {len(remaining_videos)} videos")
+                                logger.debug(f"Refresh completed, re-checking {len(remaining_videos)} videos")
                                 top_frame.listbox.recheck_videos_by_paths(remaining_videos)
                             
                             top_frame.listbox.refresh(completion_callback=on_refresh_complete)
@@ -1059,12 +1151,12 @@ class ReencodePane(wx.CollapsiblePane):
             except (VideoProcessingError, FFmpegNotFoundError, VideoFileError) as e:
                 error_msg = f"{video_name}: {e}"
                 errors.append(error_msg)
-                print(f"Video processing error: {error_msg}")
+                log_error_with_context(e, f"Processing video {video_name}", logger)
                 
             except Exception as e:
                 error_msg = f"{video_name}: Unexpected error - {e}"
                 errors.append(error_msg)
-                print(f"Unexpected error: {error_msg}")
+                log_error_with_context(e, f"Unexpected error processing {video_name}", logger)
             
             finally:
                 progress += 1
@@ -1896,6 +1988,23 @@ class SettingsPanel(wx.Panel):
         ffplay_box.Add(self.ffplay_path, 1, wx.ALL | wx.EXPAND, 5)
         ffplay_box.Add(ffplay_browse, 0, wx.ALL, 5)
 
+        # Log level setting
+        log_level_box = wx.BoxSizer(wx.HORIZONTAL)
+        log_level_label = wx.StaticText(self, label="Log level:")
+        self.log_level_choice = wx.ComboBox(self, choices=["DEBUG", "INFO", "WARNING", "ERROR"], style=wx.CB_READONLY)
+        current_log_level = self.app_state.config.get("log_level", "INFO")
+        if current_log_level in ["DEBUG", "INFO", "WARNING", "ERROR"]:
+            self.log_level_choice.SetValue(current_log_level)
+        else:
+            self.log_level_choice.SetValue("INFO")
+        
+        log_level_help = wx.StaticText(self, label="Controls verbosity of console output and log file detail")
+        log_level_help.SetFont(log_level_help.GetFont().Smaller())
+        
+        log_level_box.Add(log_level_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        log_level_box.Add(self.log_level_choice, 0, wx.ALL, 5)
+        log_level_box.Add(log_level_help, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+
         # Save button
         save_btn = wx.Button(self, label="Save Settings")
         save_btn.Bind(wx.EVT_BUTTON, self.on_save)
@@ -1903,6 +2012,7 @@ class SettingsPanel(wx.Panel):
         sizer.Add(ffmpeg_box, 0, wx.EXPAND)
         sizer.Add(ffprobe_box, 0, wx.EXPAND)
         sizer.Add(ffplay_box, 0, wx.EXPAND)
+        sizer.Add(log_level_box, 0, wx.EXPAND)
         sizer.Add(save_btn, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizer(sizer)
 
@@ -1917,6 +2027,7 @@ class SettingsPanel(wx.Panel):
         ffmpeg_path = self.ffmpeg_path.GetValue().strip()
         ffprobe_path = self.ffprobe_path.GetValue().strip()
         ffplay_path = self.ffplay_path.GetValue().strip()
+        log_level = self.log_level_choice.GetValue()
         
         # Validate paths if provided
         invalid_paths = []
@@ -1934,11 +2045,25 @@ class SettingsPanel(wx.Panel):
         self.app_state.config["ffmpeg_bin"] = ffmpeg_path
         self.app_state.config["ffprobe_bin"] = ffprobe_path
         self.app_state.config["ffplay_bin"] = ffplay_path
+        self.app_state.config["log_level"] = log_level
 
         # Update module-level variables
         video.ffmpeg_bin = ffmpeg_path or "ffmpeg"
         video.ffprobe_bin = ffprobe_path or "ffprobe"
         video.ffplay_bin = ffplay_path or "ffplay"
+        
+        # Update log level immediately
+        from modules.logging_config import set_log_level
+        import logging
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR
+        }
+        if log_level in level_map:
+            set_log_level(level_map[log_level])
+            logger.info(f"Log level changed to {log_level}")
         
         # Test FFmpeg availability with new settings
         try:

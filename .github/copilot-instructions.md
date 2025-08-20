@@ -14,7 +14,6 @@ This project enables users to efficiently process video files using FFmpeg as th
   - `video.py`: FFmpeg/FFprobe integration, video processing, codec detection
   - `presets.py`: Encoding preset management and storage
   - `output.py`: Output path generation and naming patterns
-  - `batch.py`: Batch processing operations
 
 ## Key Technologies & Dependencies
 

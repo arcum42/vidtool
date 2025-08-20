@@ -7,6 +7,10 @@ import shutil
 import re
 import threading
 import time
+from .logging_config import get_logger, log_ffmpeg_command, log_error_with_context
+
+# Module logger
+logger = get_logger('video')
 
 
 class VideoProcessingError(Exception):
@@ -338,7 +342,7 @@ class info:
         new_file_name = f"{p.stem}-{self.max_width}x{self.max_height}{p.suffix}"
         new_path = p.parent / new_file_name
         if not new_path.exists():
-            print(f"{p} -> {new_path}")
+            logger.info(f"Renaming: {p} -> {new_path}")
             p.rename(new_path)
 
 class encode:
@@ -398,11 +402,11 @@ class encode:
         
         # Only get info for video files, not subtitle files
         if input_path.suffix.lower() not in [".srt", ".vtt", ".ass", ".ssa"]:
-            print(f"Adding input file: {input_file}")
+            logger.info(f"Adding input file: {input_file}")
             try:
                 self.file_info.append(info(input_file))
             except Exception as e:
-                print(f"Warning: Could not get info for {input_file}: {e}")
+                logger.warning(f"Could not get info for {input_file}: {e}")
 
     def add_output(self, output_file):
         """Set output file with validation."""
@@ -511,7 +515,7 @@ class encode:
         """Execute the encoding with comprehensive error handling and progress tracking."""
         try:
             command = self.reencode_str()
-            print(f"Starting encode: {' '.join(command)}")
+            log_ffmpeg_command(command, logger)
             
             # Calculate total duration for progress tracking
             self.calculate_total_duration()
@@ -550,7 +554,7 @@ class encode:
             if output_path.stat().st_size == 0:
                 raise VideoProcessingError(f"Output file is empty: {self.output}")
                 
-            print(f"Encoding completed successfully: {self.output}")
+            logger.info(f"Encoding completed successfully: {self.output}")
             return True
             
         except Exception as e:
@@ -559,7 +563,7 @@ class encode:
             if output_path.exists() and output_path.stat().st_size == 0:
                 try:
                     output_path.unlink()
-                    print(f"Cleaned up empty output file: {self.output}")
+                    logger.info(f"Cleaned up empty output file: {self.output}")
                 except:
                     pass
             raise
@@ -577,17 +581,20 @@ def batch_rename(the_path):
         files = (p.resolve() for p in path.glob("**/*") if p.suffix in VIDEO_EXTENSIONS)
         renamed_count = 0
         
+        logger.info(f"Starting batch rename in directory: {the_path}")
+        
         for video in files:
             try:
                 v = info(video)
-                print(f"{video} = {v.max_width}x{v.max_height}")
+                logger.debug(f"{video} = {v.max_width}x{v.max_height}")
                 v.rename_resolution()
                 renamed_count += 1
             except Exception as e:
-                print(f"Error processing {video}: {e}")
+                logger.error(f"Error processing {video}: {e}")
                 continue
                 
-        print(f"Successfully renamed {renamed_count} files")
+        logger.info(f"Successfully renamed {renamed_count} files")
         
     except Exception as e:
+        log_error_with_context(e, "Batch rename operation", logger)
         raise VideoProcessingError(f"Batch rename failed: {e}")

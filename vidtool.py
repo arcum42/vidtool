@@ -3,6 +3,11 @@ import os
 import pathlib
 
 import modules.video as video
+from modules.logging_config import get_logger, setup_logging
+
+# Initialize logging for CLI
+setup_logging(log_to_console=True, log_to_file=False)  # CLI only needs console output
+logger = get_logger('cli')
 
 global_parser = argparse.ArgumentParser(
     prog='vidtool',
@@ -67,14 +72,14 @@ def reencode(video_file):
     v.add_output_from_input(file_append = args.suffix, file_extension = args.ext)
     if pathlib.Path(v.output).exists():
         if args.force:
-            print(f"Overwriting existing file '{v.output}'")
+            logger.info(f"Overwriting existing file '{v.output}'")
         elif args.no_clobber:
-            print(f"Not overwriting existing file '{v.output}'")
+            logger.info(f"Not overwriting existing file '{v.output}'")
             return
         else:
             prompt = input(f"Output file '{v.output}' already exists. Overwrite? (y/n) ")
             if prompt.lower() != 'y' and prompt.lower() != 'yes':
-                print(f"Output file '{v.output}' already exists. Skipping.")
+                logger.info(f"Output file '{v.output}' already exists. Skipping.")
                 return
 
     if args.strip_subs:
@@ -83,12 +88,12 @@ def reencode(video_file):
         v.copy_subtitles()
 
     if args.av_copy_only:
-        if args.strip_data: print("Warning: --strip-data is ignored when using --av-copy-only.")
-        if args.strip_video: print("Warning: --strip-video is ignored when using --av-copy-only.")
-        if args.strip_audio: print("Warning: --strip-audio is ignored when using --av-copy-only.")
-        if args.x265: print("Warning: --x265 is ignored when using --av-copy-only.")
-        if args.vcodec: print("Warning: --vcodec is ignored when using --av-copy-only.")
-        if args.acodec: print("Warning: --acodec is ignored when using --av-copy-only.")
+        if args.strip_data: logger.warning("--strip-data is ignored when using --av-copy-only.")
+        if args.strip_video: logger.warning("--strip-video is ignored when using --av-copy-only.")
+        if args.strip_audio: logger.warning("--strip-audio is ignored when using --av-copy-only.")
+        if args.x265: logger.warning("--x265 is ignored when using --av-copy-only.")
+        if args.vcodec: logger.warning("--vcodec is ignored when using --av-copy-only.")
+        if args.acodec: logger.warning("--acodec is ignored when using --av-copy-only.")
 
         v.set_video_codec('copy')
         v.set_audio_codec('copy')
@@ -103,7 +108,7 @@ def reencode(video_file):
             v.encode_x265()
         if args.vcodec:
             if args.x265: 
-                print("Warning: ignoring --vcodec because --x265 is specified.")
+                logger.warning("ignoring --vcodec because --x265 is specified.")
             else:
                 v.set_video_codec(args.vcodec)
         if args.acodec: v.set_audio_codec(args.acodec)
@@ -124,13 +129,13 @@ if args.which == 'reencode':
 
 elif args.which == 'rename':
     if args.batch:
-        print("Batch rename files to include resolution.")
+        logger.info("Batch rename files to include resolution.")
         video.batch_rename(args.file)
     else:
         if args.file == "":
-            print("File required if not using --batch.")
+            logger.error("File required if not using --batch.")
             exit(1)
-        print(f"Rename '{args.file}' to include resolution.")
+        logger.info(f"Rename '{args.file}' to include resolution.")
         v = video.info(args.file)
         v.rename_resolution()
 elif args.which == 'info':

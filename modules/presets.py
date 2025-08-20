@@ -6,6 +6,10 @@ import json
 import pathlib
 from typing import Dict, List, Any, Optional
 from .video import VideoProcessingError
+from .logging_config import get_logger, log_error_with_context
+
+# Module logger
+logger = get_logger('presets')
 
 
 class PresetError(Exception):

@@ -7,6 +7,10 @@ import datetime
 import re
 from typing import Optional, Dict, Any, List
 from .video import VideoProcessingError, info
+from .logging_config import get_logger
+
+# Module logger  
+logger = get_logger('output')
 
 
 class OutputPathGenerator:
