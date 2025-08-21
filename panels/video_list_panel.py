@@ -37,6 +37,7 @@ class VideoList(wx.ListCtrl):
         ('Video', 50),
         ('Audio', 50),
         ('Res', 80),
+        ('Runtime', 80),
         ('Size', 80),
     ]
 
@@ -168,7 +169,7 @@ class VideoList(wx.ListCtrl):
             self.sort_ascending = True
         
         # Show sorting status
-        column_names = ['Filename', 'Video Codec', 'Audio Codec', 'Resolution', 'File Size']
+        column_names = ['Filename', 'Rename Preview', 'Video Codec', 'Audio Codec', 'Resolution', 'Runtime', 'File Size']
         direction = "ascending" if self.sort_ascending else "descending"
         if self.main_frame:
             self.main_frame.SetStatusText(f"Sorted by {column_names[column]} ({direction})")
@@ -216,7 +217,21 @@ class VideoList(wx.ListCtrl):
                     return (int(width), int(height))
                 except (ValueError, AttributeError):
                     return (0, 0)
-            elif self.sort_column == 5:  # Size (now column 5)
+            elif self.sort_column == 5:  # Runtime (now column 5)
+                if not value or value == "":
+                    return 0
+                try:
+                    # Parse runtime format like "0:01:23.456789" to seconds for sorting
+                    time_parts = value.split(':')
+                    if len(time_parts) == 3:
+                        hours = int(time_parts[0])
+                        minutes = int(time_parts[1])
+                        seconds = float(time_parts[2])
+                        return hours * 3600 + minutes * 60 + seconds
+                    return 0
+                except (ValueError, IndexError):
+                    return 0
+            elif self.sort_column == 6:  # Size (now column 6)
                 if not value or value == "":
                     return 0
                 try:
@@ -486,7 +501,7 @@ class VideoList(wx.ListCtrl):
         rel_path = str(video_path.relative_to(working_dir))
         info_obj = info_cache.get(abs_path)
 
-        video_codec = audio_codec = res = size_str = ""
+        video_codec = audio_codec = res = runtime = size_str = ""
 
         if info_obj:
             if info_obj.video_streams:
@@ -496,6 +511,9 @@ class VideoList(wx.ListCtrl):
                 audio_codec = info_obj.audio_streams[0].get("codec_name", "")
 
             res = f"{info_obj.max_width}x{info_obj.max_height}" if info_obj.max_width and info_obj.max_height else ""
+            
+            # Add runtime information
+            runtime = info_obj.runtime if hasattr(info_obj, 'runtime') and info_obj.runtime else ""
 
             if info_obj.size_kb < 1024:
                 size_str = f"{info_obj.size_kb:.2f} KB"
@@ -513,7 +531,8 @@ class VideoList(wx.ListCtrl):
         self.SetItem(index, 2, video_codec)  # Video codec moved to column 2
         self.SetItem(index, 3, audio_codec)  # Audio codec moved to column 3  
         self.SetItem(index, 4, res)          # Resolution moved to column 4
-        self.SetItem(index, 5, size_str)     # Size moved to column 5
+        self.SetItem(index, 5, runtime)      # Runtime in column 5
+        self.SetItem(index, 6, size_str)     # Size moved to column 6
 
     def _smart_update_list(self, expected_files, working_dir, info_cache):
         """Smart update that only adds/removes items that have changed."""
@@ -1044,14 +1063,11 @@ class VideoListPanel(wx.Panel):
         self.rename_cancel_btn.Bind(wx.EVT_BUTTON, self.OnCancelRename)
         
         # Timer for live filtering (to avoid filtering on every keystroke)
-        self.filter_timer = None
+        self.filter_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.OnFilterTimer)
         
         # Timer for rename preview updates
         self.rename_timer = None
-        
-        # Timer for live filtering (to avoid filtering on every keystroke)
-        self.filter_timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.OnFilterTimer)
     
     def OnFilterText(self, event):
         """Handle text changes in the filter box."""

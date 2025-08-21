@@ -56,6 +56,16 @@ class SettingsPanel(wx.Panel):
         ffplay_box.Add(self.ffplay_path, 1, wx.ALL | wx.EXPAND, 5)
         ffplay_box.Add(ffplay_browse, 0, wx.ALL, 5)
 
+        # Auto-expand video info panel setting
+        auto_expand_box = wx.BoxSizer(wx.HORIZONTAL)
+        self.auto_expand_checkbox = wx.CheckBox(self, label="Auto-expand video info panel")
+        self.auto_expand_checkbox.SetValue(self.app_state.config.get("auto_expand_video_info", False))
+        auto_expand_help = wx.StaticText(self, label="Automatically expand the video info panel when selecting a video")
+        auto_expand_help.SetFont(auto_expand_help.GetFont().Smaller())
+        
+        auto_expand_box.Add(self.auto_expand_checkbox, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        auto_expand_box.Add(auto_expand_help, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+
         # Log level setting
         log_level_box = wx.BoxSizer(wx.HORIZONTAL)
         log_level_label = wx.StaticText(self, label="Log level:")
@@ -80,6 +90,7 @@ class SettingsPanel(wx.Panel):
         sizer.Add(ffmpeg_box, 0, wx.EXPAND)
         sizer.Add(ffprobe_box, 0, wx.EXPAND)
         sizer.Add(ffplay_box, 0, wx.EXPAND)
+        sizer.Add(auto_expand_box, 0, wx.EXPAND)
         sizer.Add(log_level_box, 0, wx.EXPAND)
         sizer.Add(save_btn, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
         self.SetSizer(sizer)
@@ -97,6 +108,7 @@ class SettingsPanel(wx.Panel):
         ffprobe_path = self.ffprobe_path.GetValue().strip()
         ffplay_path = self.ffplay_path.GetValue().strip()
         log_level = self.log_level_choice.GetValue()
+        auto_expand_video_info = self.auto_expand_checkbox.GetValue()
         
         # Validate paths if provided
         invalid_paths = []
@@ -115,6 +127,7 @@ class SettingsPanel(wx.Panel):
         self.app_state.config["ffprobe_bin"] = ffprobe_path
         self.app_state.config["ffplay_bin"] = ffplay_path
         self.app_state.config["log_level"] = log_level
+        self.app_state.config["auto_expand_video_info"] = auto_expand_video_info
 
         # Update module-level variables
         video.ffmpeg_bin = ffmpeg_path or "ffmpeg"
@@ -131,6 +144,9 @@ class SettingsPanel(wx.Panel):
         if log_level in level_map:
             set_log_level(level_map[log_level])
             logger.info(f"Log level changed to {log_level}")
+        
+        # Save the config to disk
+        self.app_state.save_config()
         
         # Test FFmpeg availability with new settings
         try:

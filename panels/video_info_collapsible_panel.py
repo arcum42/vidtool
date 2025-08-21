@@ -41,8 +41,9 @@ class VideoInfoCollapsiblePanel(wx.CollapsiblePane):
         """Update the video information display."""
         if self.vid_info_panel:
             self.vid_info_panel.update_info(info)
-            # Auto-expand when showing new info
-            if self.IsCollapsed():
+            # Auto-expand when showing new info only if setting is enabled
+            auto_expand = self.app_state.config.get("auto_expand_video_info", False)
+            if auto_expand and self.IsCollapsed():
                 self.Expand()
                 # Force layout refresh after expansion
                 wx.CallAfter(self._refresh_layout)
