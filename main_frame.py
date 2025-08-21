@@ -9,10 +9,12 @@ import modules.video as video
 from modules.video import VideoProcessingError, FFmpegNotFoundError, VideoFileError
 from modules.logging_config import get_logger
 from panels.video_info_panel import VideoInfoPanel
-from panels.video_list_panel import VideoList
+from panels.video_list_panel import VideoList, VideoListPanel
 from panels.reencode_panel import ReencodePane
 from panels.settings_panel import SettingsPanel
 from dialogs.selection_dialog import SelectionOptionsDialog
+from dialogs.batch_rename_dialog import BatchRenameDialog
+from dialogs.move_to_subfolder_dialog import MoveToSubfolderDialog
 
 if TYPE_CHECKING:
     from app_state import AppState
@@ -41,7 +43,6 @@ class MyFrame(wx.Frame):
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         top = wx.BoxSizer(wx.HORIZONTAL)
-        play_size = wx.BoxSizer(wx.HORIZONTAL)
         bottom = wx.BoxSizer(wx.VERTICAL)
         self.label = wx.StaticText(main_panel, label="Directory", style=wx.ALIGN_CENTER)
         self.app_state.working_dir = pathlib.Path(self.app_state.config.get("working_dir", str(pathlib.Path.cwd())))
@@ -80,39 +81,40 @@ class MyFrame(wx.Frame):
         # --- Splitter Window for Video List and Info ---
         splitter = wx.SplitterWindow(main_panel)
         self.vid_info_panel = VideoInfoPanel(splitter, self.app_state)
-        self.listbox = VideoList(splitter, self.app_state, main_frame=self, vid_info_panel=self.vid_info_panel)
-        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=760)
-        splitter.SetMinimumPaneSize(200)
-
-        self.select_all_button = wx.Button(main_panel, label="Select All")
-        self.select_all_button.Bind(wx.EVT_BUTTON, self.OnSelectAll)
-
-        self.select_none_button = wx.Button(main_panel, label="Select None")
-        self.select_none_button.Bind(wx.EVT_BUTTON, self.OnSelectNone)
+        
+        # Create selection controls that will be moved to the video list panel
+        self.select_all_checkbox = wx.CheckBox(splitter, label="Select All", style=wx.CHK_3STATE | wx.CHK_ALLOW_3RD_STATE_FOR_USER)
+        self.select_all_checkbox.Bind(wx.EVT_CHECKBOX, self.OnSelectAllCheckbox)
+        self.select_all_checkbox.SetToolTip("Check to select all, uncheck to deselect all")
 
         # Advanced selection options
-        self.select_options_button = wx.Button(main_panel, label="Select Options ▼")
+        self.select_options_button = wx.Button(splitter, label="▼")
+        self.select_options_button.SetSize(wx.Size(40, -1))
+        self.select_options_button.SetMinSize(wx.Size(40, -1))
         self.select_options_button.Bind(wx.EVT_BUTTON, self.OnSelectOptions)
+        self.select_options_button.SetToolTip("Advanced selection options (filter by codec, resolution, size, etc.)")
 
-        self.play_label = wx.StaticText(main_panel, label="Play Selection with ffplay:", style=wx.ALIGN_CENTER)
-        self.play_button = wx.Button(main_panel, label="Play")
-        self.play_button.Bind(wx.EVT_BUTTON, self.OnPlay)
+        # Menu button for additional operations
+        self.menu_button = wx.Button(splitter, label="☰")
+        self.menu_button.SetSize(wx.Size(40, -1))
+        self.menu_button.SetMinSize(wx.Size(40, -1))
+        self.menu_button.SetToolTip("Additional operations menu")
 
         self.reencode_pane = ReencodePane(main_panel, self.app_state)
         self.reencode_pane.SetSizer(wx.BoxSizer(wx.VERTICAL))
-        self.reencode_pane.Expand()
+        self.reencode_pane.Collapse()
         self.reencode_pane.Layout()
         self.reencode_pane.Fit()
 
-        play_size.Add(self.select_all_button, 0, wx.ALL, 5)
-        play_size.Add(self.select_none_button, 0, wx.ALL, 5)
-        play_size.Add(self.select_options_button, 0, wx.ALL, 5)
-        play_size.Add(self.play_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        play_size.Add(self.play_button, 0, wx.ALL, 5)
+        # Create the video list panel and pass the selection controls
+        self.listbox = VideoListPanel(splitter, self.app_state, main_frame=self, vid_info_panel=self.vid_info_panel, 
+                                    select_all_checkbox=self.select_all_checkbox, select_options_button=self.select_options_button,
+                                    menu_button=self.menu_button)
+        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=760)
+        splitter.SetMinimumPaneSize(200)
 
         bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
-        main_sizer.Add(play_size, 0, wx.EXPAND | wx.ALL, 5)
 
         main_sizer.Add(splitter, 1, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
@@ -122,7 +124,7 @@ class MyFrame(wx.Frame):
         panel.SetSizer(sizer)
         self.CreateStatusBar()
         self.SetStatusText("Welcome to Vid Tool!")
-        self.SetSize((1200, 600))
+        self.SetSize(wx.Size(1200, 600))
         self.Center()
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Show()
@@ -136,12 +138,14 @@ class MyFrame(wx.Frame):
             self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
             self.listbox.refresh(force_full_refresh=True)  # Force full refresh on directory change
             self.app_state.config["working_dir"] = str(self.app_state.working_dir)
+            self.UpdateSelectAllCheckbox()
         dlg.Destroy()
 
     def OnRefresh(self, event):
         """Handle refresh button."""
         self.listbox.refresh()
         self.SetStatusText("File list refreshed.")
+        self.UpdateSelectAllCheckbox()
 
     def OnRefreshMenu(self, event):
         """Show refresh options menu on right-click."""
@@ -163,10 +167,12 @@ class MyFrame(wx.Frame):
     def OnForceRefresh(self, event):
         """Force a complete refresh that re-processes all files."""
         self.listbox.force_refresh_all()
+        self.UpdateSelectAllCheckbox()
 
     def OnClearErrorCache(self, event):
         """Clear the cache of files that previously failed processing."""
         self.listbox.clear_error_cache()
+        self.UpdateSelectAllCheckbox()
 
     def OnGoUp(self, event):
         """Handle go up directory button."""
@@ -175,6 +181,7 @@ class MyFrame(wx.Frame):
             self.working_dir_box.SetValue(str(self.app_state.working_dir))
             self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
             self.listbox.refresh(force_full_refresh=True)  # Force full refresh on directory change
+            self.UpdateSelectAllCheckbox()
 
     def OnRecursionDepthChanged(self, event):
         """Handle recursion depth control change."""
@@ -185,6 +192,7 @@ class MyFrame(wx.Frame):
             self.SetStatusText("Directory scan depth: unlimited (all subdirectories)")
         else:
             self.SetStatusText(f"Directory scan depth: {depth} level{'s' if depth != 1 else ''} deep")
+        self.UpdateSelectAllCheckbox()
 
     def OnClose(self, event):
         """Handle application close."""
@@ -238,20 +246,121 @@ class MyFrame(wx.Frame):
         threading.Thread(target=play_videos, daemon=True).start()
         event.Skip(True)
 
+    def OnSelectAllCheckbox(self, event):
+        """Handle the three-state select all checkbox."""
+        # Get the checkbox state after the click event is processed
+        total_items = self.listbox.video_list.GetItemCount()
+        if total_items == 0:
+            return
+        
+        # Use wx.CallAfter to ensure the checkbox state is updated after the click
+        def process_checkbox_action():
+            checkbox_state = self.select_all_checkbox.Get3StateValue()
+            
+            if checkbox_state == wx.CHK_CHECKED:
+                # Checkbox is now checked (showing "Select All") - select all items
+                for i in range(total_items):
+                    self.listbox.video_list.CheckItem(i, True)
+            else:
+                # Checkbox is now unchecked or indeterminate - deselect all items  
+                for i in range(total_items):
+                    self.listbox.video_list.CheckItem(i, False)
+            
+            # Call OnChecked to update the video list and trigger checkbox update
+            self.listbox.video_list.OnChecked(event)
+            # Force immediate checkbox state update
+            self.UpdateSelectAllCheckbox()
+        
+        wx.CallAfter(process_checkbox_action)
+
+    def UpdateSelectAllCheckbox(self):
+        """Update the select all checkbox state based on current selection."""
+        if not hasattr(self, 'select_all_checkbox'):
+            return
+            
+        total_items = self.listbox.video_list.GetItemCount()
+        if total_items == 0:
+            self.select_all_checkbox.Set3StateValue(wx.CHK_UNCHECKED)
+            return
+            
+        selected_count = 0
+        for i in range(total_items):
+            if self.listbox.video_list.IsItemChecked(i):
+                selected_count += 1
+        
+        if selected_count == 0:
+            self.select_all_checkbox.Set3StateValue(wx.CHK_UNCHECKED)
+        elif selected_count == total_items:
+            self.select_all_checkbox.Set3StateValue(wx.CHK_CHECKED)
+        else:
+            self.select_all_checkbox.Set3StateValue(wx.CHK_UNDETERMINED)
+
     def OnSelectAll(self, event):
         """Select all videos."""
-        for i in range(self.listbox.GetItemCount()):
-            self.listbox.CheckItem(i)
-        self.listbox.OnChecked(event)
+        for i in range(self.listbox.video_list.GetItemCount()):
+            self.listbox.video_list.CheckItem(i)
+        self.listbox.video_list.OnChecked(event)
+        self.UpdateSelectAllCheckbox()
 
     def OnSelectNone(self, event):
         """Deselect all videos."""
-        for i in range(self.listbox.GetItemCount()):
-            self.listbox.CheckItem(i, False)
-        self.listbox.OnChecked(event)
+        for i in range(self.listbox.video_list.GetItemCount()):
+            self.listbox.video_list.CheckItem(i, False)
+        self.listbox.video_list.OnChecked(event)
+        self.UpdateSelectAllCheckbox()
 
     def OnSelectOptions(self, event):
         """Show advanced selection options dialog."""
         dlg = SelectionOptionsDialog(self, self.listbox, self.app_state)
         dlg.ShowModal()
+        dlg.Destroy()
+
+    def OnBatchRename(self, event):
+        """Show batch rename dialog for selected videos."""
+        # Get selected videos, or all visible if nothing selected
+        selected_videos = self.app_state.video_list if self.app_state.video_list else []
+        if not selected_videos:
+            # No videos selected, use all visible (filtered) videos
+            selected_videos = self.listbox.get_all_visible_files()
+        
+        if not selected_videos:
+            wx.MessageBox("No videos available. Please load a directory with video files first.", 
+                         "No Videos", wx.OK | wx.ICON_INFORMATION)
+            return
+        
+        if not self.app_state.working_dir:
+            wx.MessageBox("No working directory set.", 
+                         "No Working Directory", wx.OK | wx.ICON_WARNING)
+            return
+        
+        # Show batch rename dialog
+        dlg = BatchRenameDialog(self, selected_videos, self.app_state.working_dir)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Refresh the video list to show any changes
+            self.listbox.refresh()
+        dlg.Destroy()
+
+    def OnMoveToSubfolder(self, event):
+        """Show move to subfolder dialog for selected videos."""
+        # Get selected videos, or all visible if nothing selected
+        selected_videos = self.app_state.video_list if self.app_state.video_list else []
+        if not selected_videos:
+            # No videos selected, use all visible (filtered) videos
+            selected_videos = self.listbox.get_all_visible_files()
+        
+        if not selected_videos:
+            wx.MessageBox("No videos available. Please load a directory with video files first.", 
+                         "No Videos", wx.OK | wx.ICON_INFORMATION)
+            return
+        
+        if not self.app_state.working_dir:
+            wx.MessageBox("No working directory set.", 
+                         "No Working Directory", wx.OK | wx.ICON_WARNING)
+            return
+        
+        # Show move to subfolder dialog
+        dlg = MoveToSubfolderDialog(self, selected_videos, self.app_state.working_dir)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Refresh the video list to show any changes
+            self.listbox.refresh()
         dlg.Destroy()

@@ -29,7 +29,7 @@ class SelectionOptionsDialog(wx.Dialog):
         audio_codecs = set()
         
         # Go through all cached video info to collect actual codec names
-        for abs_path, info_obj in self.listbox.info_cache.items():
+        for abs_path, info_obj in self.listbox.video_list.info_cache.items():
             if info_obj:
                 # Extract video codecs
                 if info_obj.video_streams:
@@ -224,7 +224,7 @@ class SelectionOptionsDialog(wx.Dialog):
     def OnApply(self, event):
         """Apply the selection filters."""
         # Check if there are any videos loaded
-        if not self.listbox.GetItemCount():
+        if not self.listbox.video_list.GetItemCount():
             wx.MessageBox("No videos available to select from.", 
                          "No Videos", wx.OK | wx.ICON_INFORMATION)
             return
@@ -243,14 +243,14 @@ class SelectionOptionsDialog(wx.Dialog):
             return
         
         # First, unselect all items
-        for i in range(self.listbox.GetItemCount()):
-            self.listbox.CheckItem(i, False)
+        for i in range(self.listbox.video_list.GetItemCount()):
+            self.listbox.video_list.CheckItem(i, False)
         
         selected_count = 0
         
         # Apply filters
-        for i in range(self.listbox.GetItemCount()):
-            filename = self.listbox.GetItemText(i, 0)  # Get relative path
+        for i in range(self.listbox.video_list.GetItemCount()):
+            filename = self.listbox.video_list.GetItemText(i, 0)  # Get relative path
             if self.app_state.working_dir:
                 full_path = self.app_state.working_dir / filename
             else:
@@ -259,7 +259,7 @@ class SelectionOptionsDialog(wx.Dialog):
             should_select = True
             
             # Get video info from cache if available
-            info_obj = self.listbox.info_cache.get(str(full_path))
+            info_obj = self.listbox.video_list.info_cache.get(str(full_path))
             if not info_obj:
                 # Skip files without valid info
                 continue
@@ -337,11 +337,11 @@ class SelectionOptionsDialog(wx.Dialog):
             
             # Apply selection
             if should_select:
-                self.listbox.CheckItem(i, True)
+                self.listbox.video_list.CheckItem(i, True)
                 selected_count += 1
         
         # Update the video list
-        self.listbox.OnChecked(None)
+        self.listbox.video_list.OnChecked(None)
         
         # Show result
         wx.MessageBox(f"Selected {selected_count} videos based on your criteria.", 

@@ -6,12 +6,26 @@ VidTool is a video processing tool with both a modern graphical user interface (
 
 The GUI version (`app.py`) provides an intuitive interface for managing and processing video files. Key features include:
 
+### Core Features
 - Browse and select directories containing video files
 - View detailed information about each video (resolution, codecs, streams, etc.)
 - Batch select and process multiple videos
 - Reencode videos with customizable options (codec, suffix, extension, CRF, etc.)
 - Play videos directly from the interface
-- Rename files to include resolution
+
+### Enhanced Video Management (New!)
+- **Column Sorting**: Click any column header to sort videos by filename, codec, resolution, or size
+- **Live Filtering**: Real-time filtering with regex support - find videos instantly as you type
+- **Batch Operations**: 
+  - Rename multiple videos using regex patterns with preview
+  - Move selected videos to organized subfolders
+  - Advanced pattern matching with capture groups
+
+### Workflow Example
+1. **Filter**: Type "2023" to find all 2023 content, or use regex like `S\d+E\d+` for TV episodes
+2. **Sort**: Click column headers to organize by size, codec, resolution, etc.
+3. **Select**: Use the smart "Select All" checkbox to quickly select/deselect all visible videos
+4. **Batch Process**: Rename with patterns like `(.*)_(\d{4})_(.*)` → `\2_\1_\3` to move year to front
 
 The GUI is built with wxPython. To use it, ensure you have `wxPython` installed:
 
@@ -21,9 +35,25 @@ pip install wxPython
 
 Then run:
 
-```
+```bash
 python app.py
 ```
+
+## Demo & Testing
+
+To explore the new features with sample data, run the comprehensive demo:
+
+```bash
+python demo_all_features.py
+```
+
+This demo creates 23 diverse temporary video files and showcases:
+- Live filtering with regex examples
+- Column sorting across all data types  
+- Batch rename operations with real files
+- Moving files to organized subfolders
+
+The demo includes quick filter buttons and guided examples to help you understand the full capabilities.
 
 ## Command Line Tool
 

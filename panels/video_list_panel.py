@@ -3,6 +3,7 @@
 import wx
 import pathlib
 import threading
+import re
 from typing import TYPE_CHECKING, Optional
 
 import modules.video as video
@@ -48,6 +49,12 @@ class VideoList(wx.ListCtrl):
         # Sorting state
         self.sort_column = -1  # Currently sorted column (-1 for none)
         self.sort_ascending = True  # Sort direction
+        
+        # Filtering state
+        self.filter_pattern = ""  # Current filter pattern
+        self.compiled_filter = None  # Compiled regex pattern
+        self.all_items = []  # Store all items (including filtered out ones)
+        self.use_regex = True  # Whether to treat filter as regex
 
         for idx, (label, width) in enumerate(self.COLS):
             self.InsertColumn(idx, label)
@@ -130,6 +137,10 @@ class VideoList(wx.ListCtrl):
         # Update the output preview in the reencode pane
         if self.main_frame and hasattr(self.main_frame, 'reencode_pane'):
             self.main_frame.reencode_pane.update_output_preview()
+        
+        # Update the select all checkbox state
+        if self.main_frame and hasattr(self.main_frame, 'UpdateSelectAllCheckbox'):
+            self.main_frame.UpdateSelectAllCheckbox()
 
     def OnColumnClick(self, event):
         """Handle column header clicks to sort the list."""
@@ -231,6 +242,160 @@ class VideoList(wx.ListCtrl):
         
         # Update the video list state
         self.OnChecked(None)
+
+    def set_filter(self, pattern: str, use_regex: bool = True):
+        """Set the filter pattern and apply it to the list.
+        
+        Args:
+            pattern: Filter pattern (regex or plain text)
+            use_regex: Whether to treat pattern as regex (default: True)
+        """
+        self.filter_pattern = pattern
+        self.use_regex = use_regex
+        
+        # Compile regex pattern if using regex mode
+        if self.use_regex and pattern:
+            try:
+                self.compiled_filter = re.compile(pattern, re.IGNORECASE)
+            except re.error as e:
+                # Invalid regex - fall back to plain text search
+                self.compiled_filter = None
+                if self.main_frame:
+                    self.main_frame.SetStatusText(f"Invalid regex: {e}")
+        else:
+            self.compiled_filter = None
+        
+        self.apply_filter()
+
+    def apply_filter(self):
+        """Apply the current filter to the video list."""
+        if not self.filter_pattern:
+            # No filter - show all items
+            self._show_all_items()
+            return
+        
+        # Store current check states and selection
+        checked_items = set()
+        selected_item = None
+        
+        for i in range(self.GetItemCount()):
+            if self.IsItemChecked(i):
+                checked_items.add(self.GetItemText(i, 0))
+            if self.GetItemState(i, wx.LIST_STATE_SELECTED):
+                selected_item = self.GetItemText(i, 0)
+        
+        # Store all current items if not already stored
+        if not self.all_items:
+            self._store_all_items()
+        
+        # Filter items
+        filtered_items = []
+        for item_data in self.all_items:
+            if self._item_matches_filter(item_data):
+                filtered_items.append(item_data)
+        
+        # Update the list with filtered items
+        self.DeleteAllItems()
+        for i, item_data in enumerate(filtered_items):
+            self.InsertItem(i, item_data[0])
+            for col in range(1, len(item_data)):
+                if col < len(item_data):
+                    self.SetItem(i, col, item_data[col])
+        
+        # Apply current sorting if any
+        if self.sort_column != -1:
+            self.sort_items()
+        
+        # Restore check states and selection for visible items
+        for i in range(self.GetItemCount()):
+            filename = self.GetItemText(i, 0)
+            if filename in checked_items:
+                self.CheckItem(i, True)
+            if filename == selected_item:
+                self.SetItemState(i, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
+        
+        # Update status
+        total_items = len(self.all_items)
+        visible_items = self.GetItemCount()
+        if self.main_frame:
+            if visible_items == total_items:
+                self.main_frame.SetStatusText(f"Showing all {total_items} videos")
+            else:
+                self.main_frame.SetStatusText(f"Showing {visible_items} of {total_items} videos (filtered)")
+        
+        # Update the video list state
+        self.OnChecked(None)
+
+    def _item_matches_filter(self, item_data):
+        """Check if an item matches the current filter."""
+        if not self.filter_pattern:
+            return True
+        
+        # Search across all columns
+        search_text = " ".join(str(col) for col in item_data).lower()
+        
+        if self.use_regex and self.compiled_filter:
+            return bool(self.compiled_filter.search(search_text))
+        else:
+            # Plain text search (case-insensitive)
+            return self.filter_pattern.lower() in search_text
+
+    def _store_all_items(self):
+        """Store all current items for filtering."""
+        self.all_items = []
+        for i in range(self.GetItemCount()):
+            item_data = []
+            for col in range(self.GetColumnCount()):
+                item_data.append(self.GetItemText(i, col))
+            self.all_items.append(item_data)
+
+    def _show_all_items(self):
+        """Show all items (clear filter)."""
+        if not self.all_items:
+            return  # Nothing to restore
+        
+        # Store current check states and selection
+        checked_items = set()
+        selected_item = None
+        
+        for i in range(self.GetItemCount()):
+            if self.IsItemChecked(i):
+                checked_items.add(self.GetItemText(i, 0))
+            if self.GetItemState(i, wx.LIST_STATE_SELECTED):
+                selected_item = self.GetItemText(i, 0)
+        
+        # Restore all items
+        self.DeleteAllItems()
+        for i, item_data in enumerate(self.all_items):
+            self.InsertItem(i, item_data[0])
+            for col in range(1, len(item_data)):
+                if col < len(item_data):
+                    self.SetItem(i, col, item_data[col])
+        
+        # Apply current sorting if any
+        if self.sort_column != -1:
+            self.sort_items()
+        
+        # Restore check states and selection
+        for i in range(self.GetItemCount()):
+            filename = self.GetItemText(i, 0)
+            if filename in checked_items:
+                self.CheckItem(i, True)
+            if filename == selected_item:
+                self.SetItemState(i, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
+        
+        # Update status
+        if self.main_frame:
+            self.main_frame.SetStatusText(f"Showing all {self.GetItemCount()} videos")
+        
+        # Update the video list state
+        self.OnChecked(None)
+
+    def clear_filter(self):
+        """Clear the current filter and show all items."""
+        self.filter_pattern = ""
+        self.compiled_filter = None
+        self._show_all_items()
 
     def uncheck_video_by_path(self, video_path):
         """Uncheck a specific video by its absolute path."""
@@ -379,12 +544,20 @@ class VideoList(wx.ListCtrl):
         if self.sort_column != -1:
             self.sort_items()
         
-        # Restore check states for items that still exist
-        for i in range(self.GetItemCount()):
-            rel_path = self.GetItemText(i, 0)
-            abs_path = str(working_dir / rel_path)
-            if abs_path in checked_items:
-                self.CheckItem(i, True)
+        # Update stored items for filtering
+        self._store_all_items()
+        
+        # Re-apply current filter if any
+        if self.filter_pattern:
+            self.apply_filter()
+        
+        # Restore check states for items that still exist (done after filtering)
+        if not self.filter_pattern:  # Only if not filtering
+            for i in range(self.GetItemCount()):
+                rel_path = self.GetItemText(i, 0)
+                abs_path = str(working_dir / rel_path)
+                if abs_path in checked_items:
+                    self.CheckItem(i, True)
 
         # Update the video list to reflect current checked state
         self.OnChecked(None)
@@ -513,8 +686,14 @@ class VideoList(wx.ListCtrl):
                     for i, v in enumerate(files):
                         self._insert_video_item(i, v, wd, info_cache)
                     
-                    # Apply current sorting if any
-                    if self.sort_column != -1:
+                    # Store all items for filtering
+                    self._store_all_items()
+                    
+                    # Apply current filter if any
+                    if self.filter_pattern:
+                        self.apply_filter()
+                    elif self.sort_column != -1:
+                        # Apply current sorting if any and no filter
                         self.sort_items()
                 else:
                     # Smart refresh - compare current list with expected files
@@ -558,3 +737,208 @@ class VideoList(wx.ListCtrl):
 
             wx.CallAfter(update_ui)
         threading.Thread(target=scan_and_update, daemon=True).start()
+
+
+class VideoListPanel(wx.Panel):
+    """Panel containing a filter text box and the video list."""
+    
+    def __init__(self, parent, app_state: "AppState", main_frame=None, vid_info_panel=None, 
+                 select_all_checkbox=None, select_options_button=None, menu_button=None):
+        super().__init__(parent)
+        self.app_state = app_state
+        self.main_frame = main_frame
+        
+        # Reparent the controls to this panel if provided
+        if select_all_checkbox:
+            select_all_checkbox.Reparent(self)
+            self.select_all_checkbox = select_all_checkbox
+        else:
+            self.select_all_checkbox = None
+            
+        if select_options_button:
+            select_options_button.Reparent(self)
+            self.select_options_button = select_options_button
+        else:
+            self.select_options_button = None
+            
+        if menu_button:
+            menu_button.Reparent(self)
+            self.menu_button = menu_button
+            self.menu_button.Bind(wx.EVT_BUTTON, self.OnMenuButton)
+        else:
+            self.menu_button = None
+        
+        # Create the main sizer
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Create filter controls
+        filter_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        # Add selection controls to the far left if provided
+        if self.select_all_checkbox:
+            filter_sizer.Add(self.select_all_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        if self.select_options_button:
+            filter_sizer.Add(self.select_options_button, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL | wx.FIXED_MINSIZE, 5)
+        
+        # Add a separator if we have selection controls
+        if self.select_all_checkbox or self.select_options_button:
+            separator = wx.StaticLine(self, style=wx.LI_VERTICAL)
+            filter_sizer.Add(separator, 0, wx.EXPAND | wx.ALL, 5)
+        
+        filter_label = wx.StaticText(self, label="Filter:")
+        self.filter_text = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        self.filter_text.SetToolTip("Filter videos by filename, codec, resolution, or size. Supports regular expressions.")
+        
+        self.regex_checkbox = wx.CheckBox(self, label="Regex")
+        self.regex_checkbox.SetValue(True)
+        self.regex_checkbox.SetToolTip("Enable regular expression filtering")
+        
+        self.clear_filter_btn = wx.Button(self, label="Clear")
+        self.clear_filter_btn.SetSize(wx.Size(60, -1))
+        
+        filter_sizer.Add(filter_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        filter_sizer.Add(self.filter_text, 1, wx.EXPAND | wx.ALL, 5)
+        filter_sizer.Add(self.regex_checkbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        filter_sizer.Add(self.clear_filter_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        
+        # Add menu button to the far right if provided
+        if self.menu_button:
+            filter_sizer.Add(self.menu_button, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL | wx.FIXED_MINSIZE, 5)
+        
+        # Create the video list
+        self.video_list = VideoList(self, app_state, main_frame, vid_info_panel)
+        
+        # Add to main sizer
+        sizer.Add(filter_sizer, 0, wx.EXPAND)
+        sizer.Add(self.video_list, 1, wx.EXPAND)
+        
+        self.SetSizer(sizer)
+        
+        # Bind events
+        self.filter_text.Bind(wx.EVT_TEXT, self.OnFilterText)
+        self.filter_text.Bind(wx.EVT_TEXT_ENTER, self.OnFilterEnter)
+        self.regex_checkbox.Bind(wx.EVT_CHECKBOX, self.OnRegexToggle)
+        self.clear_filter_btn.Bind(wx.EVT_BUTTON, self.OnClearFilter)
+        
+        # Timer for live filtering (to avoid filtering on every keystroke)
+        self.filter_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.OnFilterTimer)
+    
+    def OnFilterText(self, event):
+        """Handle text changes in the filter box."""
+        # Use a timer to debounce rapid typing
+        self.filter_timer.Stop()
+        self.filter_timer.Start(300, wx.TIMER_ONE_SHOT)  # 300ms delay
+    
+    def OnFilterEnter(self, event):
+        """Handle Enter key in filter text box."""
+        self.filter_timer.Stop()
+        self.ApplyFilter()
+    
+    def OnFilterTimer(self, event):
+        """Handle the timer event for debounced filtering."""
+        self.ApplyFilter()
+    
+    def OnRegexToggle(self, event):
+        """Handle regex checkbox toggle."""
+        self.ApplyFilter()
+    
+    def OnClearFilter(self, event):
+        """Handle clear filter button."""
+        self.filter_text.SetValue("")
+        self.ApplyFilter()
+    
+    def OnMenuButton(self, event):
+        """Handle menu button click - show operations menu."""
+        if not self.menu_button:
+            return
+            
+        menu = wx.Menu()
+        
+        # Add Play menu item
+        play_item = menu.Append(wx.ID_ANY, "Play Selection...", "Play selected videos with ffplay")
+        
+        # Add separator
+        menu.AppendSeparator()
+        
+        # Add batch operation menu items
+        batch_rename_item = menu.Append(wx.ID_ANY, "Batch Rename...", "Rename selected videos using patterns")
+        move_subfolder_item = menu.Append(wx.ID_ANY, "Move to Subfolder...", "Move selected videos to a subfolder")
+        
+        # Bind menu events
+        self.Bind(wx.EVT_MENU, self.OnPlay, play_item)
+        self.Bind(wx.EVT_MENU, self.OnBatchRename, batch_rename_item)
+        self.Bind(wx.EVT_MENU, self.OnMoveToSubfolder, move_subfolder_item)
+        
+        # Show menu at the menu button position
+        menu_position = self.menu_button.GetPosition()
+        menu_position.y += self.menu_button.GetSize().height
+        self.PopupMenu(menu, menu_position)
+        menu.Destroy()
+    
+    def OnBatchRename(self, event):
+        """Handle batch rename menu item - delegate to main frame."""
+        if self.main_frame:
+            self.main_frame.OnBatchRename(event)
+    
+    def OnMoveToSubfolder(self, event):
+        """Handle move to subfolder menu item - delegate to main frame."""
+        if self.main_frame:
+            self.main_frame.OnMoveToSubfolder(event)
+    
+    def OnPlay(self, event):
+        """Handle play menu item - delegate to main frame."""
+        if self.main_frame:
+            self.main_frame.OnPlay(event)
+    
+    def ApplyFilter(self):
+        """Apply the current filter to the video list."""
+        pattern = self.filter_text.GetValue()
+        use_regex = self.regex_checkbox.GetValue()
+        self.video_list.set_filter(pattern, use_regex)
+    
+    # Delegate methods to the video list
+    def refresh(self, completion_callback=None, force_full_refresh=False):
+        """Delegate refresh to the video list."""
+        return self.video_list.refresh(completion_callback, force_full_refresh)
+    
+    def clear_error_cache(self):
+        """Delegate to the video list."""
+        return self.video_list.clear_error_cache()
+    
+    def force_refresh_all(self):
+        """Delegate to the video list."""
+        return self.video_list.force_refresh_all()
+    
+    def uncheck_video_by_path(self, video_path):
+        """Delegate to the video list."""
+        return self.video_list.uncheck_video_by_path(video_path)
+    
+    def recheck_videos_by_paths(self, video_paths):
+        """Delegate to the video list."""
+        return self.video_list.recheck_videos_by_paths(video_paths)
+    
+    # Additional delegation methods for main_frame compatibility
+    def GetItemCount(self):
+        """Delegate to the video list."""
+        return self.video_list.GetItemCount()
+    
+    def CheckItem(self, index, checked=True):
+        """Delegate to the video list."""
+        return self.video_list.CheckItem(index, checked)
+    
+    def OnChecked(self, event):
+        """Delegate to the video list."""
+        return self.video_list.OnChecked(event)
+    
+    def get_all_visible_files(self):
+        """Get all currently visible (filtered) files as absolute paths."""
+        if not self.app_state.working_dir:
+            return []
+            
+        visible_files = []
+        for i in range(self.video_list.GetItemCount()):
+            rel_path = self.video_list.GetItemText(i, 0)
+            abs_path = str(self.app_state.working_dir / rel_path)
+            visible_files.append(abs_path)
+        return visible_files
