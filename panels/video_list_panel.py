@@ -16,7 +16,18 @@ logger = get_logger('video_list')
 
 
 class VideoList(wx.ListCtrl):
-    """Custom ListCtrl for displaying and managing video files."""
+    """Custom ListCtrl for displaying and managing video files with sorting capabilities.
+    
+    Features:
+    - Click column headers to sort by that column
+    - Click the same header again to reverse sort order
+    - Sorting is maintained during list refreshes
+    - Supports sorting by:
+      - Filename (alphabetical)
+      - Video/Audio codecs (alphabetical)
+      - Resolution (by width then height)
+      - File size (by actual size in bytes)
+    """
     
     COLS = [
         ('Filename', 500),
@@ -33,6 +44,10 @@ class VideoList(wx.ListCtrl):
         self.vid_info_panel = vid_info_panel
         self.info_cache = {}  # filename (str) -> video.info object
         self.error_files = set()  # Track files that previously failed processing
+        
+        # Sorting state
+        self.sort_column = -1  # Currently sorted column (-1 for none)
+        self.sort_ascending = True  # Sort direction
 
         for idx, (label, width) in enumerate(self.COLS):
             self.InsertColumn(idx, label)
@@ -41,6 +56,7 @@ class VideoList(wx.ListCtrl):
         self.EnableCheckBoxes()
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnSelected)
         self.Bind(wx.EVT_LIST_ITEM_CHECKED, self.OnChecked)
+        self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColumnClick)
         self.refresh()
 
     def get_video_files_with_depth(self, directory):
@@ -73,7 +89,12 @@ class VideoList(wx.ListCtrl):
         item = self.GetItemText(selection, 0)
         if self.main_frame:
             self.main_frame.SetStatusText(f"Selected: {item}")
-        self.app_state.selected_video = self.app_state.working_dir / item
+        
+        if self.app_state.working_dir:
+            self.app_state.selected_video = self.app_state.working_dir / item
+        else:
+            self.app_state.selected_video = None
+            return
 
         info_obj = self.info_cache.get(str(self.app_state.selected_video))
         if not info_obj:
@@ -98,14 +119,118 @@ class VideoList(wx.ListCtrl):
 
     def OnChecked(self, event):
         """Handle video checkbox changes."""
-        self.app_state.video_list = [
-            str(self.app_state.working_dir / self.GetItemText(i, 0))
-            for i in range(self.GetItemCount()) if self.IsItemChecked(i)
-        ]
+        if self.app_state.working_dir:
+            self.app_state.video_list = [
+                str(self.app_state.working_dir / self.GetItemText(i, 0))
+                for i in range(self.GetItemCount()) if self.IsItemChecked(i)
+            ]
+        else:
+            self.app_state.video_list = []
         
         # Update the output preview in the reencode pane
         if self.main_frame and hasattr(self.main_frame, 'reencode_pane'):
             self.main_frame.reencode_pane.update_output_preview()
+
+    def OnColumnClick(self, event):
+        """Handle column header clicks to sort the list."""
+        column = event.GetColumn()
+        
+        # Toggle sort direction if clicking the same column
+        if self.sort_column == column:
+            self.sort_ascending = not self.sort_ascending
+        else:
+            self.sort_column = column
+            self.sort_ascending = True
+        
+        # Show sorting status
+        column_names = ['Filename', 'Video Codec', 'Audio Codec', 'Resolution', 'File Size']
+        direction = "ascending" if self.sort_ascending else "descending"
+        if self.main_frame:
+            self.main_frame.SetStatusText(f"Sorted by {column_names[column]} ({direction})")
+        
+        self.sort_items()
+
+    def sort_items(self):
+        """Sort the list items based on current sort column and direction."""
+        if self.sort_column == -1 or self.GetItemCount() == 0:
+            return
+        
+        # Store current check states and selection
+        checked_items = set()
+        selected_item = None
+        
+        for i in range(self.GetItemCount()):
+            if self.IsItemChecked(i):
+                checked_items.add(self.GetItemText(i, 0))
+            if self.GetItemState(i, wx.LIST_STATE_SELECTED):
+                selected_item = self.GetItemText(i, 0)
+        
+        # Collect all row data
+        items = []
+        for i in range(self.GetItemCount()):
+            row_data = []
+            for col in range(self.GetColumnCount()):
+                row_data.append(self.GetItemText(i, col))
+            items.append(row_data)
+        
+        # Sort based on the selected column
+        def sort_key(item):
+            value = item[self.sort_column]
+            
+            if self.sort_column == 0:  # Filename
+                return value.lower()
+            elif self.sort_column == 1 or self.sort_column == 2:  # Video/Audio codec
+                return value.lower()
+            elif self.sort_column == 3:  # Resolution
+                if not value or value == "":
+                    return (0, 0)
+                try:
+                    width, height = value.split('x')
+                    return (int(width), int(height))
+                except (ValueError, AttributeError):
+                    return (0, 0)
+            elif self.sort_column == 4:  # Size
+                if not value or value == "":
+                    return 0
+                try:
+                    # Extract numeric value and unit
+                    parts = value.split()
+                    if len(parts) == 2:
+                        size_value = float(parts[0])
+                        unit = parts[1].upper()
+                        # Convert to bytes for comparison
+                        if unit == 'KB':
+                            return size_value * 1024
+                        elif unit == 'MB':
+                            return size_value * 1024 * 1024
+                        elif unit == 'GB':
+                            return size_value * 1024 * 1024 * 1024
+                    return float(parts[0]) if parts else 0
+                except (ValueError, IndexError):
+                    return 0
+            
+            return value.lower()
+        
+        # Sort the items
+        items.sort(key=sort_key, reverse=not self.sort_ascending)
+        
+        # Clear and repopulate the list
+        self.DeleteAllItems()
+        for i, row_data in enumerate(items):
+            self.InsertItem(i, row_data[0])
+            for col in range(1, len(row_data)):
+                self.SetItem(i, col, row_data[col])
+        
+        # Restore check states and selection
+        for i in range(self.GetItemCount()):
+            filename = self.GetItemText(i, 0)
+            if filename in checked_items:
+                self.CheckItem(i, True)
+            if filename == selected_item:
+                self.SetItemState(i, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
+        
+        # Update the video list state
+        self.OnChecked(None)
 
     def uncheck_video_by_path(self, video_path):
         """Uncheck a specific video by its absolute path."""
@@ -250,6 +375,10 @@ class VideoList(wx.ListCtrl):
                 self._insert_video_item(insert_index, file_path, working_dir, info_cache)
                 logger.debug(f"Added item at index {insert_index}: {file_path.name}")
 
+        # Apply current sorting if any
+        if self.sort_column != -1:
+            self.sort_items()
+        
         # Restore check states for items that still exist
         for i in range(self.GetItemCount()):
             rel_path = self.GetItemText(i, 0)
@@ -383,6 +512,10 @@ class VideoList(wx.ListCtrl):
                     self.DeleteAllItems()
                     for i, v in enumerate(files):
                         self._insert_video_item(i, v, wd, info_cache)
+                    
+                    # Apply current sorting if any
+                    if self.sort_column != -1:
+                        self.sort_items()
                 else:
                     # Smart refresh - compare current list with expected files
                     self._smart_update_list(files, wd, info_cache)
