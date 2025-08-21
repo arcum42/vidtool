@@ -135,6 +135,8 @@ class VideoList(wx.ListCtrl):
 
         if self.vid_info_panel and info_obj:
             self.vid_info_panel.update_info(info_obj)
+        elif self.main_frame and hasattr(self.main_frame, 'show_video_info') and info_obj:
+            self.main_frame.show_video_info(info_obj)
 
     def OnChecked(self, event):
         """Handle video checkbox changes."""
@@ -1101,11 +1103,18 @@ class VideoListPanel(wx.Panel):
         batch_rename_item = menu.Append(wx.ID_ANY, "Batch Rename Dialog...", "Open batch rename dialog")
         move_subfolder_item = menu.Append(wx.ID_ANY, "Move to Subfolder...", "Move selected videos to a subfolder")
         
+        # Add separator for destructive operations
+        menu.AppendSeparator()
+        
+        # Add delete option
+        delete_item = menu.Append(wx.ID_ANY, "Delete Selected Files...", "Delete selected video files permanently")
+        
         # Bind menu events
         self.Bind(wx.EVT_MENU, self.OnPlay, play_item)
         self.Bind(wx.EVT_MENU, self.OnToggleInlineRename, rename_toggle_item)
         self.Bind(wx.EVT_MENU, self.OnBatchRename, batch_rename_item)
         self.Bind(wx.EVT_MENU, self.OnMoveToSubfolder, move_subfolder_item)
+        self.Bind(wx.EVT_MENU, self.OnDeleteSelected, delete_item)
         
         # Show menu at the menu button position
         menu_position = self.menu_button.GetPosition()
@@ -1342,6 +1351,68 @@ class VideoListPanel(wx.Panel):
         """Handle play menu item - delegate to main frame."""
         if self.main_frame:
             self.main_frame.OnPlay(event)
+    
+    def OnDeleteSelected(self, event):
+        """Handle delete selected files menu item."""
+        # Get selected files
+        selected_files = []
+        for i in range(self.video_list.GetItemCount()):
+            if self.video_list.IsItemChecked(i):
+                filename = self.video_list.GetItemText(i, 0)
+                selected_files.append(filename)
+        
+        if not selected_files:
+            wx.MessageBox("No files selected for deletion.", "Nothing to Delete", 
+                         wx.OK | wx.ICON_INFORMATION)
+            return
+        
+        # Show confirmation dialog with file list
+        file_list = "\n".join([f"• {f}" for f in selected_files[:20]])  # Show first 20
+        if len(selected_files) > 20:
+            file_list += f"\n... and {len(selected_files) - 20} more files"
+        
+        msg = f"Are you sure you want to permanently delete {len(selected_files)} file(s)?\n\n{file_list}\n\nThis action cannot be undone!"
+        
+        dlg = wx.MessageDialog(self, msg, "Confirm Delete", 
+                              wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING)
+        
+        if dlg.ShowModal() == wx.ID_YES:
+            # Perform deletion
+            success_count = 0
+            errors = []
+            
+            for filename in selected_files:
+                if self.app_state.working_dir:
+                    file_path = self.app_state.working_dir / filename
+                    try:
+                        if file_path.exists():
+                            file_path.unlink()  # Delete the file
+                            success_count += 1
+                            logger.info(f"Deleted file: {filename}")
+                        else:
+                            errors.append(f"{filename}: File not found")
+                    except Exception as e:
+                        errors.append(f"{filename}: {e}")
+                        logger.error(f"Failed to delete {filename}: {e}")
+            
+            # Show results
+            if not errors:
+                wx.MessageBox(f"Successfully deleted {success_count} file(s).", 
+                             "Delete Complete", wx.OK | wx.ICON_INFORMATION)
+            else:
+                error_summary = f"Deleted {success_count} file(s) successfully.\n{len(errors)} deletion(s) failed:\n\n"
+                error_summary += "\n".join(errors[:5])  # Show first 5 errors
+                if len(errors) > 5:
+                    error_summary += f"\n... and {len(errors) - 5} more errors"
+                
+                wx.MessageBox(error_summary, "Delete Completed with Errors", 
+                             wx.OK | wx.ICON_WARNING)
+            
+            # Refresh the list to remove deleted files
+            if success_count > 0:
+                self.refresh()
+        
+        dlg.Destroy()
     
     def ApplyFilter(self):
         """Apply the current filter to the video list."""

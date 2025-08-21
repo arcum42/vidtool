@@ -31,28 +31,98 @@ class VideoInfoPanel(wx.Panel):
 
     def InitUI(self):
         """Initialize the UI elements for video information display."""
-        sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
         
-        for label_text, field_key in self.LABELS:
-            row_sizer = wx.BoxSizer(wx.HORIZONTAL)
-            label = wx.StaticText(self, label=label_text)
-            label.SetMinSize((120, -1))
-            
-            if field_key in ["video_streams", "audio_streams", "subtitle_streams", "data_streams"]:
-                # Use multiline text for stream info
-                field = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
-                field.SetMinSize((-1, 60))
-            else:
-                # Use single line text for basic info
-                field = wx.TextCtrl(self, style=wx.TE_READONLY)
-            
-            self.fields[field_key] = field
-            
-            row_sizer.Add(label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-            row_sizer.Add(field, 1, wx.ALL | wx.EXPAND, 5)
-            sizer.Add(row_sizer, 0, wx.EXPAND)
+        # Row 1: Filename (full width since it can be long)
+        filename_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        filename_label = wx.StaticText(self, label="Filename:")
+        filename_label.SetMinSize(wx.Size(80, -1))
+        self.fields["filename"] = wx.TextCtrl(self, style=wx.TE_READONLY)
+        filename_sizer.Add(filename_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        filename_sizer.Add(self.fields["filename"], 1, wx.ALL | wx.EXPAND, 3)
+        main_sizer.Add(filename_sizer, 0, wx.EXPAND)
         
-        self.SetSizer(sizer)
+        # Row 2: Resolution, Size, Runtime (compact info in one row)
+        info_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        # Resolution
+        res_label = wx.StaticText(self, label="Resolution:")
+        res_label.SetMinSize(wx.Size(80, -1))
+        self.fields["resolution"] = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.fields["resolution"].SetMinSize(wx.Size(100, -1))
+        
+        # Size
+        size_label = wx.StaticText(self, label="Size:")
+        size_label.SetMinSize(wx.Size(40, -1))
+        self.fields["size"] = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.fields["size"].SetMinSize(wx.Size(100, -1))
+        
+        # Runtime
+        runtime_label = wx.StaticText(self, label="Runtime:")
+        runtime_label.SetMinSize(wx.Size(60, -1))
+        self.fields["runtime"] = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.fields["runtime"].SetMinSize(wx.Size(120, -1))
+        
+        info_sizer.Add(res_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        info_sizer.Add(self.fields["resolution"], 0, wx.ALL, 3)
+        info_sizer.Add(size_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        info_sizer.Add(self.fields["size"], 0, wx.ALL, 3)
+        info_sizer.Add(runtime_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        info_sizer.Add(self.fields["runtime"], 1, wx.ALL | wx.EXPAND, 3)
+        main_sizer.Add(info_sizer, 0, wx.EXPAND)
+        
+        # Row 3: Codec summary (full width since it can be long)
+        codec_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        codec_label = wx.StaticText(self, label="Codecs:")
+        codec_label.SetMinSize(wx.Size(80, -1))
+        self.fields["codec"] = wx.TextCtrl(self, style=wx.TE_READONLY)
+        codec_sizer.Add(codec_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        codec_sizer.Add(self.fields["codec"], 1, wx.ALL | wx.EXPAND, 3)
+        main_sizer.Add(codec_sizer, 0, wx.EXPAND)
+        
+        # Stream details - Row 1: Video and Audio
+        stream_row1_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        # Video streams
+        video_label = wx.StaticText(self, label="Video:")
+        video_label.SetMinSize(wx.Size(50, -1))
+        self.fields["video_streams"] = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.fields["video_streams"].SetMinSize(wx.Size(-1, 40))
+        
+        # Audio streams  
+        audio_label = wx.StaticText(self, label="Audio:")
+        audio_label.SetMinSize(wx.Size(50, -1))
+        self.fields["audio_streams"] = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.fields["audio_streams"].SetMinSize(wx.Size(-1, 40))
+        
+        stream_row1_sizer.Add(video_label, 0, wx.ALL | wx.ALIGN_TOP, 3)
+        stream_row1_sizer.Add(self.fields["video_streams"], 1, wx.ALL | wx.EXPAND, 3)
+        stream_row1_sizer.Add(audio_label, 0, wx.ALL | wx.ALIGN_TOP, 3)
+        stream_row1_sizer.Add(self.fields["audio_streams"], 1, wx.ALL | wx.EXPAND, 3)
+        main_sizer.Add(stream_row1_sizer, 0, wx.EXPAND)
+        
+        # Stream details - Row 2: Subtitles and Data
+        stream_row2_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        # Subtitle streams
+        subtitle_label = wx.StaticText(self, label="Subtitles:")
+        subtitle_label.SetMinSize(wx.Size(60, -1))
+        self.fields["subtitle_streams"] = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.fields["subtitle_streams"].SetMinSize(wx.Size(-1, 40))
+        
+        # Data streams
+        data_label = wx.StaticText(self, label="Data:")
+        data_label.SetMinSize(wx.Size(40, -1))
+        self.fields["data_streams"] = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.fields["data_streams"].SetMinSize(wx.Size(-1, 40))
+        
+        stream_row2_sizer.Add(subtitle_label, 0, wx.ALL | wx.ALIGN_TOP, 3)
+        stream_row2_sizer.Add(self.fields["subtitle_streams"], 1, wx.ALL | wx.EXPAND, 3)
+        stream_row2_sizer.Add(data_label, 0, wx.ALL | wx.ALIGN_TOP, 3)
+        stream_row2_sizer.Add(self.fields["data_streams"], 1, wx.ALL | wx.EXPAND, 3)
+        main_sizer.Add(stream_row2_sizer, 0, wx.EXPAND)
+        
+        self.SetSizer(main_sizer)
 
     def update_info(self, info):
         """Update the display with video information."""
@@ -68,7 +138,13 @@ class VideoInfoPanel(wx.Panel):
         for key in ("video_streams", "audio_streams", "subtitle_streams", "data_streams"):
             streams = getattr(info, key)
             if streams:
-                codec_list.append(", ".join(s["codec_long_name"] for s in streams))
+                codec_names = []
+                for s in streams:
+                    # Safely get codec name with fallbacks
+                    codec_name = s.get("codec_long_name") or s.get("codec_name") or "Unknown"
+                    codec_names.append(codec_name)
+                if codec_names:
+                    codec_list.append(", ".join(codec_names))
 
         self.fields["codec"].SetValue(" / ".join(codec_list))
         self.fields["audio_streams"].SetValue(

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import modules.video as video
 from modules.video import VideoProcessingError, FFmpegNotFoundError, VideoFileError
 from modules.logging_config import get_logger
-from panels.video_info_panel import VideoInfoPanel
+from panels.video_info_collapsible_panel import VideoInfoCollapsiblePanel
 from panels.video_list_panel import VideoList, VideoListPanel
 from panels.reencode_panel import ReencodePane
 from panels.settings_panel import SettingsPanel
@@ -78,24 +78,21 @@ class MyFrame(wx.Frame):
         top.Add(self.recursion_label, 0, wx.LEFT | wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
         top.Add(self.recursion_spin, 0, wx.EXPAND | wx.RIGHT | wx.ALL, 5)
 
-        # --- Splitter Window for Video List and Info ---
-        splitter = wx.SplitterWindow(main_panel)
-        self.vid_info_panel = VideoInfoPanel(splitter, self.app_state)
-        
+        # --- Main Content Area ---
         # Create selection controls that will be moved to the video list panel
-        self.select_all_checkbox = wx.CheckBox(splitter, label="Select All", style=wx.CHK_3STATE | wx.CHK_ALLOW_3RD_STATE_FOR_USER)
+        self.select_all_checkbox = wx.CheckBox(main_panel, label="Select All", style=wx.CHK_3STATE | wx.CHK_ALLOW_3RD_STATE_FOR_USER)
         self.select_all_checkbox.Bind(wx.EVT_CHECKBOX, self.OnSelectAllCheckbox)
         self.select_all_checkbox.SetToolTip("Check to select all, uncheck to deselect all")
 
         # Advanced selection options
-        self.select_options_button = wx.Button(splitter, label="▼")
+        self.select_options_button = wx.Button(main_panel, label="▼")
         self.select_options_button.SetSize(wx.Size(40, -1))
         self.select_options_button.SetMinSize(wx.Size(40, -1))
         self.select_options_button.Bind(wx.EVT_BUTTON, self.OnSelectOptions)
         self.select_options_button.SetToolTip("Advanced selection options (filter by codec, resolution, size, etc.)")
 
         # Menu button for additional operations
-        self.menu_button = wx.Button(splitter, label="☰")
+        self.menu_button = wx.Button(main_panel, label="☰")
         self.menu_button.SetSize(wx.Size(40, -1))
         self.menu_button.SetMinSize(wx.Size(40, -1))
         self.menu_button.SetToolTip("Additional operations menu")
@@ -106,17 +103,22 @@ class MyFrame(wx.Frame):
         self.reencode_pane.Layout()
         self.reencode_pane.Fit()
 
-        # Create the video list panel and pass the selection controls
-        self.listbox = VideoListPanel(splitter, self.app_state, main_frame=self, vid_info_panel=self.vid_info_panel, 
+        # Create the video list panel
+        self.listbox = VideoListPanel(main_panel, self.app_state, main_frame=self, vid_info_panel=None, 
                                     select_all_checkbox=self.select_all_checkbox, select_options_button=self.select_options_button,
                                     menu_button=self.menu_button)
-        splitter.SplitVertically(self.listbox, self.vid_info_panel, sashPosition=760)
-        splitter.SetMinimumPaneSize(200)
+        
+        # Create collapsible video info panel (following ReencodePane pattern)
+        self.info_collapsible = VideoInfoCollapsiblePanel(main_panel, self.app_state)
+        
+        # Set initial collapsed state 
+        self.info_collapsible.Collapse(True)
 
         bottom.Add(self.reencode_pane, 0, wx.GROW | wx.ALL, 5)
         main_sizer.Add(top, 0, wx.EXPAND | wx.ALL, 5)
 
-        main_sizer.Add(splitter, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(self.listbox, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(self.info_collapsible, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(bottom, 0, wx.EXPAND | wx.ALL, 5)
         main_panel.SetSizer(main_sizer)
 
@@ -136,13 +138,16 @@ class MyFrame(wx.Frame):
     def SetupAccelerators(self):
         """Set up keyboard accelerators."""
         # Create accelerator table for keyboard shortcuts
+        self.info_toggle_id = wx.NewId()
         accel_tbl = wx.AcceleratorTable([
             (wx.ACCEL_CTRL, ord('R'), wx.ID_ANY),  # Ctrl+R for toggle inline rename
+            (wx.ACCEL_CTRL, ord('I'), self.info_toggle_id),  # Ctrl+I for toggle video info
         ])
         self.SetAcceleratorTable(accel_tbl)
         
-        # Bind the accelerator event
+        # Bind the accelerator events
         self.Bind(wx.EVT_MENU, self.OnToggleInlineRename, id=wx.ID_ANY)
+        self.Bind(wx.EVT_MENU, self.OnToggleVideoInfo, id=self.info_toggle_id)
 
     def OnChangeDir(self, event):
         """Handle directory change button."""
@@ -213,6 +218,18 @@ class MyFrame(wx.Frame):
         """Toggle inline rename mode (Ctrl+R shortcut)."""
         if hasattr(self.listbox, 'toggle_inline_rename'):
             self.listbox.toggle_inline_rename()
+
+    def OnToggleVideoInfo(self, event):
+        """Toggle video information panel (Ctrl+I shortcut)."""
+        if self.info_collapsible.IsCollapsed():
+            self.info_collapsible.Expand()
+        else:
+            self.info_collapsible.Collapse()
+
+    def show_video_info(self, info_obj):
+        """Show video information in the collapsible panel."""
+        if self.info_collapsible and info_obj:
+            self.info_collapsible.show_video_info(info_obj)
 
     def OnClose(self, event):
         """Handle application close."""
