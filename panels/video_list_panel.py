@@ -174,6 +174,122 @@ class VideoList(wx.ListCtrl):
             import traceback
             traceback.print_exc()
 
+    def _insert_video_item(self, index, video_path, working_dir, info_cache):
+        """Insert a single video item into the list at the specified index."""
+        abs_path = str(video_path)
+        rel_path = str(video_path.relative_to(working_dir))
+        info_obj = info_cache.get(abs_path)
+
+        video_codec = audio_codec = res = size_str = ""
+
+        if info_obj:
+            if info_obj.video_streams:
+                video_codec = info_obj.video_streams[0].get("codec_name", "")
+
+            if info_obj.audio_streams:
+                audio_codec = info_obj.audio_streams[0].get("codec_name", "")
+
+            res = f"{info_obj.max_width}x{info_obj.max_height}" if info_obj.max_width and info_obj.max_height else ""
+
+            if info_obj.size_kb < 1024:
+                size_str = f"{info_obj.size_kb:.2f} KB"
+            elif info_obj.size_mb < 1024:
+                size_str = f"{info_obj.size_mb:.2f} MB"
+            else:
+                size_str = f"{info_obj.size_gb:.2f} GB"
+        else:
+            # Mark files that failed to process
+            video_codec = "ERROR"
+
+        self.InsertItem(index, rel_path)
+        self.SetItem(index, 1, video_codec)
+        self.SetItem(index, 2, audio_codec)
+        self.SetItem(index, 3, res)
+        self.SetItem(index, 4, size_str)
+
+    def _smart_update_list(self, expected_files, working_dir, info_cache):
+        """Smart update that only adds/removes items that have changed."""
+        # Store current check states before making changes
+        checked_items = {}
+        for i in range(self.GetItemCount()):
+            rel_path = self.GetItemText(i, 0)
+            abs_path = str(working_dir / rel_path)
+            if self.IsItemChecked(i):
+                checked_items[abs_path] = True
+
+        # Get current items in the list
+        current_items = {}
+        for i in range(self.GetItemCount()):
+            rel_path = self.GetItemText(i, 0)
+            abs_path = str(working_dir / rel_path)
+            current_items[abs_path] = i
+
+        # Create sets for comparison
+        expected_paths = {str(f) for f in expected_files}
+        current_paths = set(current_items.keys())
+
+        # Find items to remove (exist in current but not in expected)
+        to_remove = current_paths - expected_paths
+        # Find items to add (exist in expected but not in current)
+        to_add = expected_paths - current_paths
+
+        # Remove items in reverse order to maintain indices
+        items_to_remove = [(current_items[path], path) for path in to_remove]
+        items_to_remove.sort(reverse=True)
+        
+        for index, path in items_to_remove:
+            self.DeleteItem(index)
+            logger.debug(f"Removed item at index {index}: {pathlib.Path(path).name}")
+
+        # Add new items
+        for file_path in expected_files:
+            abs_path = str(file_path)
+            if abs_path in to_add:
+                # Find the correct insertion position to maintain sorted order
+                insert_index = self._find_insert_position(file_path, expected_files)
+                self._insert_video_item(insert_index, file_path, working_dir, info_cache)
+                logger.debug(f"Added item at index {insert_index}: {file_path.name}")
+
+        # Restore check states for items that still exist
+        for i in range(self.GetItemCount()):
+            rel_path = self.GetItemText(i, 0)
+            abs_path = str(working_dir / rel_path)
+            if abs_path in checked_items:
+                self.CheckItem(i, True)
+
+        # Update the video list to reflect current checked state
+        self.OnChecked(None)
+
+    def _find_insert_position(self, new_file, expected_files):
+        """Find the correct position to insert a new file to maintain sorted order."""
+        expected_list = list(expected_files)
+        new_file_index = expected_list.index(new_file)
+        
+        # Count how many files before this one are already in the list
+        files_before = 0
+        for i in range(new_file_index):
+            file_to_check = expected_list[i]
+            rel_path = str(file_to_check.relative_to(self.app_state.working_dir))
+            # Check if this file is already in the list
+            for list_index in range(self.GetItemCount()):
+                if self.GetItemText(list_index, 0) == rel_path:
+                    files_before += 1
+                    break
+        
+        return files_before
+
+    def _update_video_list_for_existing_files(self, expected_files):
+        """Update the app_state.video_list to only include files that still exist."""
+        if not self.app_state.video_list:
+            return
+            
+        expected_paths = {str(f) for f in expected_files}
+        # Filter video_list to only include files that still exist
+        self.app_state.video_list = [
+            video_path for video_path in self.app_state.video_list 
+            if video_path in expected_paths
+        ]
+
     def clear_error_cache(self):
         """Clear the cache of files that previously failed processing."""
         self.error_files.clear()
@@ -184,22 +300,31 @@ class VideoList(wx.ListCtrl):
         """Force a complete refresh that re-processes all files, including previously failed ones."""
         self.info_cache.clear()
         self.error_files.clear()
-        self.refresh()
+        self.refresh(force_full_refresh=True)
         if self.main_frame:
             self.main_frame.SetStatusText("Forcing complete refresh - all files will be re-processed")
 
-    def refresh(self, completion_callback=None):
-        """Refresh the video list by scanning the working directory."""
-        self.app_state.video_list = []
-
-        self.DeleteAllItems()
-        # Don't clear the cache - preserve existing info
-        # self.info_cache = {}
-
+    def refresh(self, completion_callback=None, force_full_refresh=False):
+        """Refresh the video list by scanning the working directory.
+        
+        Args:
+            completion_callback: Function to call when refresh is complete
+            force_full_refresh: If True, delete all items and rebuild from scratch
+        """
         if not self.app_state.working_dir:
             if completion_callback:
                 wx.CallAfter(completion_callback)
             return
+
+        # Check if working directory has changed - if so, force full refresh
+        current_wd = self.app_state.working_dir
+        if not hasattr(self, '_last_working_dir') or self._last_working_dir != current_wd:
+            force_full_refresh = True
+            self._last_working_dir = current_wd
+
+        if force_full_refresh:
+            self.app_state.video_list = []
+            self.DeleteAllItems()
 
         wd = self.app_state.working_dir  # capture current working_dir for thread safety
         def scan_and_update():
@@ -217,10 +342,12 @@ class VideoList(wx.ListCtrl):
                                                   "FFmpeg Not Found", wx.OK | wx.ICON_ERROR))
                 return
             
+            # Get current list of files that should be displayed
+            expected_files = []
             for p in sorted(self.get_video_files_with_depth(wd)):
                 if p.suffix in VIDEO_EXTENSIONS:
                     abs_path = str(p.resolve())
-                    files.append(p.resolve())
+                    expected_files.append(p.resolve())
                     
                     # Only process files that aren't already in cache
                     if abs_path not in info_cache:
@@ -245,45 +372,29 @@ class VideoList(wx.ListCtrl):
                             self.error_files.add(abs_path)  # Remember this file failed
                             logger.error(f"Unexpected error processing {abs_path}: {e}")
 
+            files = expected_files
+
             def update_ui():
                 if self.app_state.working_dir != wd:
                     return
 
-                self.DeleteAllItems()
-                for i, v in enumerate(files):
-                    abs_path = str(v)
-                    rel_path = str(v.relative_to(wd))
-                    info_obj = info_cache.get(abs_path)
-
-                    video_codec = audio_codec = res = size_str = ""
-
-                    if info_obj:
-                        if info_obj.video_streams:
-                            video_codec = info_obj.video_streams[0].get("codec_name", "")
-
-                        if info_obj.audio_streams:
-                            audio_codec = info_obj.audio_streams[0].get("codec_name", "")
-
-                        res = f"{info_obj.max_width}x{info_obj.max_height}" if info_obj.max_width and info_obj.max_height else ""
-
-                        if info_obj.size_kb < 1024:
-                            size_str = f"{info_obj.size_kb:.2f} KB"
-                        elif info_obj.size_mb < 1024:
-                            size_str = f"{info_obj.size_mb:.2f} MB"
-                        else:
-                            size_str = f"{info_obj.size_gb:.2f} GB"
-                    else:
-                        # Mark files that failed to process
-                        video_codec = "ERROR"
-
-                    self.InsertItem(i, rel_path)
-                    self.SetItem(i, 1, video_codec)
-                    self.SetItem(i, 2, audio_codec)
-                    self.SetItem(i, 3, res)
-                    self.SetItem(i, 4, size_str)
+                if force_full_refresh:
+                    # Full refresh - rebuild everything
+                    self.DeleteAllItems()
+                    for i, v in enumerate(files):
+                        self._insert_video_item(i, v, wd, info_cache)
+                else:
+                    # Smart refresh - compare current list with expected files
+                    self._smart_update_list(files, wd, info_cache)
 
                 self.info_cache = info_cache
-                self.app_state.video_list = []
+                
+                # Only clear video_list if we're doing a full refresh
+                if force_full_refresh:
+                    self.app_state.video_list = []
+                else:
+                    # Update video_list to remove any files that no longer exist
+                    self._update_video_list_for_existing_files(files)
                 
                 # Show error summary only for NEW errors in this refresh
                 if new_errors and self.main_frame:

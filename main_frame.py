@@ -134,7 +134,7 @@ class MyFrame(wx.Frame):
             self.app_state.working_dir = pathlib.Path(dlg.GetPath()).resolve()
             self.working_dir_box.SetValue(str(self.app_state.working_dir))
             self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
-            self.listbox.refresh()
+            self.listbox.refresh(force_full_refresh=True)  # Force full refresh on directory change
             self.app_state.config["working_dir"] = str(self.app_state.working_dir)
         dlg.Destroy()
 
@@ -174,13 +174,13 @@ class MyFrame(wx.Frame):
             self.app_state.working_dir = self.app_state.working_dir.parent
             self.working_dir_box.SetValue(str(self.app_state.working_dir))
             self.SetStatusText(f"Working directory: {str(self.app_state.working_dir)}")
-            self.listbox.refresh()
+            self.listbox.refresh(force_full_refresh=True)  # Force full refresh on directory change
 
     def OnRecursionDepthChanged(self, event):
         """Handle recursion depth control change."""
         depth = self.recursion_spin.GetValue()
         self.app_state.config["recursion_depth"] = depth
-        self.listbox.refresh()  # Refresh the file list with new depth
+        self.listbox.refresh(force_full_refresh=True)  # Force full refresh when depth changes
         if depth == 0:
             self.SetStatusText("Directory scan depth: unlimited (all subdirectories)")
         else:
