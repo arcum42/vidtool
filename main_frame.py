@@ -127,7 +127,22 @@ class MyFrame(wx.Frame):
         self.SetSize(wx.Size(1200, 600))
         self.Center()
         self.Bind(wx.EVT_CLOSE, self.OnClose)
+        
+        # Set up keyboard shortcuts
+        self.SetupAccelerators()
+        
         self.Show()
+    
+    def SetupAccelerators(self):
+        """Set up keyboard accelerators."""
+        # Create accelerator table for keyboard shortcuts
+        accel_tbl = wx.AcceleratorTable([
+            (wx.ACCEL_CTRL, ord('R'), wx.ID_ANY),  # Ctrl+R for toggle inline rename
+        ])
+        self.SetAcceleratorTable(accel_tbl)
+        
+        # Bind the accelerator event
+        self.Bind(wx.EVT_MENU, self.OnToggleInlineRename, id=wx.ID_ANY)
 
     def OnChangeDir(self, event):
         """Handle directory change button."""
@@ -193,6 +208,11 @@ class MyFrame(wx.Frame):
         else:
             self.SetStatusText(f"Directory scan depth: {depth} level{'s' if depth != 1 else ''} deep")
         self.UpdateSelectAllCheckbox()
+
+    def OnToggleInlineRename(self, event):
+        """Toggle inline rename mode (Ctrl+R shortcut)."""
+        if hasattr(self.listbox, 'toggle_inline_rename'):
+            self.listbox.toggle_inline_rename()
 
     def OnClose(self, event):
         """Handle application close."""

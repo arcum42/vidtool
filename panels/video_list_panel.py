@@ -4,6 +4,7 @@ import wx
 import pathlib
 import threading
 import re
+import os
 from typing import TYPE_CHECKING, Optional
 
 import modules.video as video
@@ -32,6 +33,7 @@ class VideoList(wx.ListCtrl):
     
     COLS = [
         ('Filename', 500),
+        ('Rename Preview', 400),  # Moved to second position, hidden by default
         ('Video', 50),
         ('Audio', 50),
         ('Res', 80),
@@ -55,10 +57,20 @@ class VideoList(wx.ListCtrl):
         self.compiled_filter = None  # Compiled regex pattern
         self.all_items = []  # Store all items (including filtered out ones)
         self.use_regex = True  # Whether to treat filter as regex
+        
+        # Rename mode state
+        self.rename_mode = False  # Whether rename mode is active
+        self.rename_pattern = ""  # Current rename pattern
+        self.replace_pattern = ""  # Current replace pattern
+        self.case_sensitive = False  # Case sensitive rename
+        self.rename_preview_cache = {}  # Cache for rename previews
 
         for idx, (label, width) in enumerate(self.COLS):
             self.InsertColumn(idx, label)
-            self.SetColumnWidth(idx, width)
+            if idx == 1 and not self.rename_mode:  # Hide rename preview column (index 1) initially
+                self.SetColumnWidth(idx, 0)
+            else:
+                self.SetColumnWidth(idx, width)
 
         self.EnableCheckBoxes()
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnSelected)
@@ -190,9 +202,11 @@ class VideoList(wx.ListCtrl):
             
             if self.sort_column == 0:  # Filename
                 return value.lower()
-            elif self.sort_column == 1 or self.sort_column == 2:  # Video/Audio codec
+            elif self.sort_column == 1:  # Rename Preview
                 return value.lower()
-            elif self.sort_column == 3:  # Resolution
+            elif self.sort_column == 2 or self.sort_column == 3:  # Video/Audio codec (now columns 2,3)
+                return value.lower()
+            elif self.sort_column == 4:  # Resolution (now column 4)
                 if not value or value == "":
                     return (0, 0)
                 try:
@@ -200,7 +214,7 @@ class VideoList(wx.ListCtrl):
                     return (int(width), int(height))
                 except (ValueError, AttributeError):
                     return (0, 0)
-            elif self.sort_column == 4:  # Size
+            elif self.sort_column == 5:  # Size (now column 5)
                 if not value or value == "":
                     return 0
                 try:
@@ -492,10 +506,12 @@ class VideoList(wx.ListCtrl):
             video_codec = "ERROR"
 
         self.InsertItem(index, rel_path)
-        self.SetItem(index, 1, video_codec)
-        self.SetItem(index, 2, audio_codec)
-        self.SetItem(index, 3, res)
-        self.SetItem(index, 4, size_str)
+        # Column 1 is now Rename Preview (will be empty initially)
+        self.SetItem(index, 1, "")  # Rename Preview - empty by default
+        self.SetItem(index, 2, video_codec)  # Video codec moved to column 2
+        self.SetItem(index, 3, audio_codec)  # Audio codec moved to column 3  
+        self.SetItem(index, 4, res)          # Resolution moved to column 4
+        self.SetItem(index, 5, size_str)     # Size moved to column 5
 
     def _smart_update_list(self, expected_files, working_dir, info_cache):
         """Smart update that only adds/removes items that have changed."""
@@ -738,6 +754,171 @@ class VideoList(wx.ListCtrl):
             wx.CallAfter(update_ui)
         threading.Thread(target=scan_and_update, daemon=True).start()
 
+    def set_rename_mode(self, enabled, rename_pattern="", replace_pattern="", case_sensitive=False):
+        """Enable or disable rename mode and update the preview column."""
+        print(f"DEBUG: set_rename_mode called - enabled={enabled}, pattern='{rename_pattern}', replace='{replace_pattern}', case={case_sensitive}")
+        
+        self.rename_mode = enabled
+        self.rename_pattern = rename_pattern
+        self.replace_pattern = replace_pattern
+        self.case_sensitive = case_sensitive
+        
+        # Show/hide the rename preview column (index 1)
+        preview_col_idx = 1
+        print(f"DEBUG: Preview column index: {preview_col_idx}")
+        if enabled:
+            print(f"DEBUG: Showing preview column with width {self.COLS[preview_col_idx][1]}")
+            self.SetColumnWidth(preview_col_idx, self.COLS[preview_col_idx][1])  # Show with default width
+            # Always update previews when patterns change, even if mode was already enabled
+            self.update_rename_previews()
+        else:
+            self.SetColumnWidth(preview_col_idx, 0)  # Hide column
+            self.rename_preview_cache.clear()
+    
+    def update_rename_patterns(self, rename_pattern, replace_pattern, case_sensitive):
+        """Update rename patterns and refresh previews without changing column visibility."""
+        print(f"DEBUG: update_rename_patterns called - pattern='{rename_pattern}', replace='{replace_pattern}', case={case_sensitive}")
+        self.rename_pattern = rename_pattern
+        self.replace_pattern = replace_pattern
+        self.case_sensitive = case_sensitive
+        if self.rename_mode:
+            print("DEBUG: Rename mode is enabled, calling update_rename_previews")
+            self.update_rename_previews()
+        else:
+            print("DEBUG: Rename mode is disabled")
+    
+    def update_rename_previews(self):
+        """Update the rename preview column for all visible items."""
+        print(f"DEBUG: update_rename_previews called - mode={self.rename_mode}, pattern='{self.rename_pattern}', replace='{self.replace_pattern}'")
+        print(f"DEBUG: Item count: {self.GetItemCount()}")
+        
+        if not self.rename_mode:
+            # Clear all preview values if rename mode is disabled, but only if they're not already empty
+            for i in range(self.GetItemCount()):
+                current_preview = self.GetItemText(i, 1)  # Column 1 is rename preview
+                if current_preview:  # Only update if not already empty
+                    self.SetItem(i, 1, "")
+            return
+            
+        # If no pattern is provided, clear previews only if they're not already empty
+        if not self.rename_pattern:
+            print("DEBUG: No rename pattern, clearing previews")
+            for i in range(self.GetItemCount()):
+                current_preview = self.GetItemText(i, 1)  # Column 1 is rename preview
+                if current_preview:  # Only update if not already empty
+                    print(f"DEBUG: Clearing preview for item {i}")
+                    self.SetItem(i, 1, "")
+            return
+        
+        # Compile regex
+        try:
+            flags = 0 if self.case_sensitive else re.IGNORECASE
+            regex = re.compile(self.rename_pattern, flags)
+        except re.error:
+            # Show error in all preview cells, but only if they don't already show the error
+            for i in range(self.GetItemCount()):
+                current_preview = self.GetItemText(i, 1)  # Column 1 is rename preview
+                if current_preview != "ERROR: Invalid regex":
+                    self.SetItem(i, 1, "ERROR: Invalid regex")
+            return
+        
+        # Update preview for each visible item
+        for i in range(self.GetItemCount()):
+            original_name = self.GetItemText(i, 0)
+            print(f"DEBUG: Processing item {i}: '{original_name}'")
+            
+            try:
+                # Apply regex substitution
+                new_name = regex.sub(self.replace_pattern, original_name)
+                
+                # Check if name changed and validate
+                if new_name == original_name:
+                    preview = "No change"
+                elif not new_name or new_name.isspace():
+                    preview = "ERROR: Empty name"
+                else:
+                    # Split path to validate only the filename part, not the directory path
+                    directory_part = os.path.dirname(new_name)
+                    filename_part = os.path.basename(new_name)
+                    
+                    # Check for invalid characters only in the filename part
+                    if any(char in filename_part for char in '<>:"/\\|?*'):
+                        preview = "ERROR: Invalid characters"
+                    elif not filename_part or filename_part.isspace():
+                        preview = "ERROR: Empty filename"
+                    else:
+                        # Check if file would exist
+                        if self.app_state.working_dir:
+                            new_path = self.app_state.working_dir / new_name
+                            old_path = self.app_state.working_dir / original_name
+                            if new_path.exists() and new_path != old_path:
+                                preview = f"WARNING: {new_name}"
+                            else:
+                                preview = new_name
+                        else:
+                            preview = new_name
+                
+                print(f"DEBUG: Final preview text: '{preview}'")
+                # Only update if the preview text actually changed
+                current_preview = self.GetItemText(i, 1)  # Column 1 is rename preview
+                if current_preview != preview:
+                    print(f"DEBUG: Setting preview for item {i} from '{current_preview}' to '{preview}'")
+                    self.SetItem(i, 1, preview)
+                else:
+                    print(f"DEBUG: Preview unchanged for item {i}: '{current_preview}'")
+                
+            except Exception as e:
+                error_text = f"ERROR: {str(e)[:30]}"
+                current_preview = self.GetItemText(i, 1)  # Column 1 is rename preview
+                if current_preview != error_text:
+                    self.SetItem(i, 1, error_text)
+
+    def apply_renames(self):
+        """Apply the rename operations based on current preview."""
+        if not self.rename_mode or not self.rename_pattern:
+            return 0, []
+        
+        success_count = 0
+        errors = []
+        
+        for i in range(self.GetItemCount()):
+            original_name = self.GetItemText(i, 0)
+            preview = self.GetItemText(i, 1)  # Rename Preview is column 1
+            
+            # Skip if no change or error
+            if preview in ["No change", ""] or preview.startswith("ERROR:"):
+                continue
+                
+            # Handle warnings (extract new name)
+            if preview.startswith("WARNING: "):
+                new_name = preview[9:]  # Remove "WARNING: " prefix
+            else:
+                new_name = preview
+            
+            # Perform the rename
+            if self.app_state.working_dir:
+                try:
+                    old_path = self.app_state.working_dir / original_name
+                    new_path = self.app_state.working_dir / new_name
+                    
+                    # Only rename if actually different
+                    if old_path != new_path:
+                        # Check if target already exists (should have been caught earlier)
+                        if new_path.exists():
+                            # This is an overwrite - log it but proceed since user confirmed
+                            logger.warning(f"Overwriting existing file: {new_name}")
+                        
+                        old_path.rename(new_path)
+                        success_count += 1
+                        logger.info(f"Renamed: {original_name} → {new_name}")
+                        
+                except Exception as e:
+                    error_msg = f"{original_name}: {e}"
+                    errors.append(error_msg)
+                    logger.error(f"Rename failed: {error_msg}")
+        
+        return success_count, errors
+
 
 class VideoListPanel(wx.Panel):
     """Panel containing a filter text box and the video list."""
@@ -805,20 +986,66 @@ class VideoListPanel(wx.Panel):
         if self.menu_button:
             filter_sizer.Add(self.menu_button, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL | wx.FIXED_MINSIZE, 5)
         
+        # Create rename bar (initially hidden)
+        self.rename_bar = wx.Panel(self)
+        rename_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        rename_label = wx.StaticText(self.rename_bar, label="Find:")
+        self.rename_find_text = wx.TextCtrl(self.rename_bar, style=wx.TE_PROCESS_ENTER)
+        self.rename_find_text.SetToolTip("Regular expression pattern to find in filenames")
+        
+        replace_label = wx.StaticText(self.rename_bar, label="Replace:")
+        self.rename_replace_text = wx.TextCtrl(self.rename_bar, style=wx.TE_PROCESS_ENTER)
+        self.rename_replace_text.SetToolTip("Replacement text (use \\1, \\2, etc. for capture groups)")
+        
+        self.rename_case_cb = wx.CheckBox(self.rename_bar, label="Case sensitive")
+        
+        self.rename_apply_btn = wx.Button(self.rename_bar, label="Apply Rename")
+        self.rename_cancel_btn = wx.Button(self.rename_bar, label="Cancel")
+        
+        rename_sizer.Add(rename_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        rename_sizer.Add(self.rename_find_text, 1, wx.EXPAND | wx.ALL, 5)
+        rename_sizer.Add(replace_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        rename_sizer.Add(self.rename_replace_text, 1, wx.EXPAND | wx.ALL, 5)
+        rename_sizer.Add(self.rename_case_cb, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        rename_sizer.Add(self.rename_apply_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        rename_sizer.Add(self.rename_cancel_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        
+        self.rename_bar.SetSizer(rename_sizer)
+        self.rename_bar.Hide()  # Initially hidden
+        
         # Create the video list
         self.video_list = VideoList(self, app_state, main_frame, vid_info_panel)
         
         # Add to main sizer
         sizer.Add(filter_sizer, 0, wx.EXPAND)
+        sizer.Add(self.rename_bar, 0, wx.EXPAND)
         sizer.Add(self.video_list, 1, wx.EXPAND)
         
         self.SetSizer(sizer)
         
-        # Bind events
+        # Bind events for filter controls
         self.filter_text.Bind(wx.EVT_TEXT, self.OnFilterText)
         self.filter_text.Bind(wx.EVT_TEXT_ENTER, self.OnFilterEnter)
         self.regex_checkbox.Bind(wx.EVT_CHECKBOX, self.OnRegexToggle)
         self.clear_filter_btn.Bind(wx.EVT_BUTTON, self.OnClearFilter)
+        
+                # Bind events for rename controls
+        self.rename_find_text.Bind(wx.EVT_TEXT, self.OnRenameTextChange)
+        self.rename_find_text.Bind(wx.EVT_TEXT_ENTER, self.OnRenameTextChange)
+        self.rename_find_text.Bind(wx.EVT_KILL_FOCUS, self.OnRenameTextChange)  # Try focus events too
+        self.rename_replace_text.Bind(wx.EVT_TEXT, self.OnRenameTextChange)
+        self.rename_replace_text.Bind(wx.EVT_TEXT_ENTER, self.OnRenameTextChange)
+        self.rename_replace_text.Bind(wx.EVT_KILL_FOCUS, self.OnRenameTextChange)  # Try focus events too
+        self.rename_case_cb.Bind(wx.EVT_CHECKBOX, self.OnRenameTextChange)
+        self.rename_apply_btn.Bind(wx.EVT_BUTTON, self.OnApplyRename)
+        self.rename_cancel_btn.Bind(wx.EVT_BUTTON, self.OnCancelRename)
+        
+        # Timer for live filtering (to avoid filtering on every keystroke)
+        self.filter_timer = None
+        
+        # Timer for rename preview updates
+        self.rename_timer = None
         
         # Timer for live filtering (to avoid filtering on every keystroke)
         self.filter_timer = wx.Timer(self)
@@ -861,12 +1088,22 @@ class VideoListPanel(wx.Panel):
         # Add separator
         menu.AppendSeparator()
         
+        # Add inline rename toggle
+        if hasattr(self, 'rename_bar') and self.rename_bar.IsShown():
+            rename_toggle_item = menu.Append(wx.ID_ANY, "Hide Inline Rename", "Hide the inline rename bar")
+        else:
+            rename_toggle_item = menu.Append(wx.ID_ANY, "Show Inline Rename", "Show the inline rename bar")
+        
+        # Add separator
+        menu.AppendSeparator()
+        
         # Add batch operation menu items
-        batch_rename_item = menu.Append(wx.ID_ANY, "Batch Rename...", "Rename selected videos using patterns")
+        batch_rename_item = menu.Append(wx.ID_ANY, "Batch Rename Dialog...", "Open batch rename dialog")
         move_subfolder_item = menu.Append(wx.ID_ANY, "Move to Subfolder...", "Move selected videos to a subfolder")
         
         # Bind menu events
         self.Bind(wx.EVT_MENU, self.OnPlay, play_item)
+        self.Bind(wx.EVT_MENU, self.OnToggleInlineRename, rename_toggle_item)
         self.Bind(wx.EVT_MENU, self.OnBatchRename, batch_rename_item)
         self.Bind(wx.EVT_MENU, self.OnMoveToSubfolder, move_subfolder_item)
         
@@ -876,6 +1113,221 @@ class VideoListPanel(wx.Panel):
         self.PopupMenu(menu, menu_position)
         menu.Destroy()
     
+    def OnToggleInlineRename(self, event):
+        """Toggle the inline rename bar visibility."""
+        if hasattr(self, 'rename_bar'):
+            if self.rename_bar.IsShown():
+                self.hide_inline_rename()
+            else:
+                self.show_inline_rename()
+    
+    def show_inline_rename(self):
+        """Show the inline rename bar and enable rename mode."""
+        if hasattr(self, 'rename_bar'):
+            self.rename_bar.Show()
+            # Enable rename mode with current field values
+            find_pattern = self.rename_find_text.GetValue()
+            replace_pattern = self.rename_replace_text.GetValue()
+            case_sensitive = self.rename_case_cb.GetValue()
+            self.video_list.set_rename_mode(True, find_pattern, replace_pattern, case_sensitive)
+            
+            # Start a periodic timer to monitor text changes
+            self.start_rename_monitoring()
+            
+            self.Layout()
+    
+    def hide_inline_rename(self):
+        """Hide the inline rename bar and disable rename mode."""
+        if hasattr(self, 'rename_bar'):
+            self.rename_bar.Hide()
+            self.video_list.set_rename_mode(False)
+            
+            # Stop monitoring timer
+            self.stop_rename_monitoring()
+            
+            self.Layout()
+    
+    def start_rename_monitoring(self):
+        """Start monitoring text changes with a periodic timer."""
+        print("DEBUG: start_rename_monitoring called")
+        # Stop any existing monitoring
+        self.stop_rename_monitoring()
+        
+        # Use CallLater approach instead of wx.Timer for better reliability
+        self.rename_monitoring_active = True
+        
+        # Store current values
+        self.last_find_pattern = self.rename_find_text.GetValue()
+        self.last_replace_pattern = self.rename_replace_text.GetValue()
+        self.last_case_sensitive = self.rename_case_cb.GetValue()
+        print(f"DEBUG: Initial values - find='{self.last_find_pattern}', replace='{self.last_replace_pattern}', case={self.last_case_sensitive}")
+        
+        # Start the monitoring loop
+        self.schedule_rename_check()
+    
+    def schedule_rename_check(self):
+        """Schedule the next rename field check."""
+        if hasattr(self, 'rename_monitoring_active') and self.rename_monitoring_active:
+            wx.CallLater(500, self.check_rename_changes)
+    
+    def check_rename_changes(self):
+        """Check if rename fields have changed and update preview if needed."""
+        print("DEBUG: check_rename_changes called")
+        
+        # Check if monitoring should continue
+        if not hasattr(self, 'rename_monitoring_active') or not self.rename_monitoring_active:
+            print("DEBUG: Monitoring not active, stopping")
+            return
+            
+        if not hasattr(self, 'rename_bar') or not self.rename_bar.IsShown():
+            print("DEBUG: Rename bar not shown, stopping monitoring")
+            self.stop_rename_monitoring()
+            return
+        
+        # Get current values
+        current_find = self.rename_find_text.GetValue()
+        current_replace = self.rename_replace_text.GetValue()
+        current_case = self.rename_case_cb.GetValue()
+        print(f"DEBUG: Current values - find='{current_find}', replace='{current_replace}', case={current_case}")
+        
+        # Check if anything changed
+        if (current_find != self.last_find_pattern or 
+            current_replace != self.last_replace_pattern or 
+            current_case != self.last_case_sensitive):
+            
+            print("DEBUG: Change detected, updating patterns")
+            # Update stored values
+            self.last_find_pattern = current_find
+            self.last_replace_pattern = current_replace
+            self.last_case_sensitive = current_case
+            
+            # Update patterns and preview
+            self.video_list.update_rename_patterns(current_find, current_replace, current_case)
+        else:
+            print("DEBUG: No changes detected")
+        
+        # Schedule next check
+        self.schedule_rename_check()
+    
+    def stop_rename_monitoring(self):
+        """Stop the rename monitoring."""
+        print("DEBUG: stop_rename_monitoring called")
+        self.rename_monitoring_active = False
+        # Clean up old timer if it exists
+        if hasattr(self, 'rename_monitor_timer') and self.rename_monitor_timer:
+            print("DEBUG: Stopping old timer")
+            self.rename_monitor_timer.Stop()
+            self.rename_monitor_timer = None
+        else:
+            print("DEBUG: No old timer to stop")
+    
+    def OnRenameTextChange(self, event):
+        """Handle changes in rename text fields (legacy method for compatibility)."""
+        # This method is kept for compatibility but the CallLater monitoring approach is used instead
+        pass
+    
+    def OnRenameTimerExpired(self, event):
+        """Handle timer expiration and update rename preview (legacy method)."""
+        # This method is kept for compatibility but not used with new CallLater approach
+        pass
+    
+    def update_rename_preview(self):
+        """Update the rename preview based on current input."""
+        if not hasattr(self, 'rename_bar') or not self.rename_bar.IsShown():
+            return
+            
+        find_pattern = self.rename_find_text.GetValue()
+        replace_pattern = self.rename_replace_text.GetValue()
+        case_sensitive = self.rename_case_cb.GetValue()
+        
+        # Debug print to verify this method is being called with correct values
+        print(f"DEBUG: update_rename_preview - find='{find_pattern}', replace='{replace_pattern}', case={case_sensitive}")
+        
+        self.video_list.set_rename_mode(True, find_pattern, replace_pattern, case_sensitive)
+    
+    def OnApplyRename(self, event):
+        """Apply the rename operations."""
+        # Count valid operations and check for overwrites
+        valid_count = 0
+        warning_count = 0
+        overwrite_conflicts = []
+        
+        for i in range(self.video_list.GetItemCount()):
+            original_name = self.video_list.GetItemText(i, 0)
+            preview = self.video_list.GetItemText(i, 1)  # Rename Preview is now column 1
+            
+            if preview and not preview.startswith("ERROR:") and preview != "No change":
+                # Extract the new name (handle warnings)
+                if preview.startswith("WARNING: "):
+                    new_name = preview[9:]  # Remove "WARNING: " prefix
+                    warning_count += 1
+                else:
+                    new_name = preview
+                    valid_count += 1
+                
+                # Check for potential overwrites
+                if self.app_state.working_dir:
+                    old_path = self.app_state.working_dir / original_name
+                    new_path = self.app_state.working_dir / new_name
+                    
+                    # Only check if it's actually a different file
+                    if old_path != new_path and new_path.exists():
+                        overwrite_conflicts.append(f"{original_name} → {new_name}")
+        
+        if valid_count == 0 and warning_count == 0:
+            wx.MessageBox("No valid rename operations to apply.", "Nothing to Do", 
+                         wx.OK | wx.ICON_INFORMATION)
+            return
+        
+        # Check for overwrite conflicts
+        if overwrite_conflicts:
+            conflict_msg = f"The following {len(overwrite_conflicts)} rename(s) would overwrite existing files:\n\n"
+            conflict_msg += "\n".join(overwrite_conflicts[:10])  # Show first 10
+            if len(overwrite_conflicts) > 10:
+                conflict_msg += f"\n... and {len(overwrite_conflicts) - 10} more"
+            conflict_msg += "\n\nDo you want to proceed anyway?"
+            
+            if wx.MessageBox(conflict_msg, "Overwrite Warning", 
+                           wx.YES_NO | wx.ICON_WARNING) != wx.YES:
+                return
+        
+        # Confirm operation
+        msg = f"Apply {valid_count} rename operations"
+        if warning_count > 0:
+            msg += f" and {warning_count} operations with warnings"
+        msg += "?"
+        
+        if wx.MessageBox(msg, "Confirm Inline Rename", 
+                        wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
+            return
+        
+        # Apply the renames
+        success_count, errors = self.video_list.apply_renames()
+        
+        # Show results
+        if not errors:
+            wx.MessageBox(f"Successfully renamed {success_count} files.", 
+                         "Rename Complete", wx.OK | wx.ICON_INFORMATION)
+        else:
+            error_summary = f"Renamed {success_count} files successfully.\n{len(errors)} operations failed:\n\n"
+            error_summary += "\n".join(errors[:5])  # Show first 5 errors
+            if len(errors) > 5:
+                error_summary += f"\n... and {len(errors) - 5} more errors"
+            
+            wx.MessageBox(error_summary, "Rename Completed with Errors", 
+                         wx.OK | wx.ICON_WARNING)
+        
+        # Refresh the list to show new names
+        if success_count > 0:
+            self.refresh()
+        
+        # Hide the rename bar after successful operation
+        self.hide_inline_rename()
+    
+    def OnCancelRename(self, event):
+        """Cancel rename mode and hide the rename bar."""
+        self.hide_inline_rename()
+
     def OnBatchRename(self, event):
         """Handle batch rename menu item - delegate to main frame."""
         if self.main_frame:
@@ -942,3 +1394,10 @@ class VideoListPanel(wx.Panel):
             abs_path = str(self.app_state.working_dir / rel_path)
             visible_files.append(abs_path)
         return visible_files
+
+    def toggle_inline_rename(self):
+        """Toggle the inline rename mode."""
+        if hasattr(self, 'rename_bar') and self.rename_bar.IsShown():
+            self.hide_inline_rename()
+        else:
+            self.show_inline_rename()
