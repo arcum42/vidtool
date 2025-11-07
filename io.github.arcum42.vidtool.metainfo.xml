@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.arcum42.vidtool</id>
+  
+  <name>VidTool</name>
+  <summary>Video processing and batch reencoding tool</summary>
+  
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  
+  <description>
+    <p>
+      VidTool is a comprehensive video processing application that provides both a modern 
+      wxPython-based GUI and a command-line interface for batch video processing, 
+      reencoding, and management tasks.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Browse and select directories containing video files</li>
+      <li>View detailed information about each video (resolution, codecs, streams)</li>
+      <li>Batch select and process multiple videos</li>
+      <li>Reencode videos with customizable options (codec, CRF, etc.)</li>
+      <li>Column sorting and live filtering with regex support</li>
+      <li>Batch renaming and folder organization</li>
+      <li>Play videos directly from the interface</li>
+    </ul>
+  </description>
+  
+  <launchable type="desktop-id">io.github.arcum42.vidtool.desktop</launchable>
+  
+  <url type="homepage">https://github.com/arcum42/vidtool</url>
+  <url type="bugtracker">https://github.com/arcum42/vidtool/issues</url>
+  
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window showing video list and details</caption>
+    </screenshot>
+  </screenshots>
+  
+  <developer_name>arcum42</developer_name>
+  
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+  
+  <content_rating type="oars-1.1" />
+  
+  <releases>
+    <release version="1.0.0" date="2025-11-06">
+      <description>
+        <p>Initial Flatpak release</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,133 @@
+app-id: io.github.arcum42.vidtool
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: vidtool
+
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '25.08'
+    add-ld-path: .
+    no-autodownload: false
+  # Allow GTK3 theme extensions to be mounted so the app can match the host theme
+  org.gtk.Gtk3theme:
+    version: '3.24'
+    directory: share/themes
+    subdirectories: true
+    no-autodownload: true
+  # Bring in translations and common fonts for the user's locale (includes many Noto families)
+  org.freedesktop.Platform.Locale:
+    version: '25.08'
+    directory: share/runtime/locale
+    subdirectories: true
+    locale-subset: false
+    no-autodownload: false
+
+finish-args:
+  # X11 + XShm access for GUI
+  - --share=ipc
+  - --socket=x11
+  # Wayland access
+  - --socket=wayland
+  # Access to host filesystem for video processing
+  - --filesystem=host
+  # Access to removable media
+  - --filesystem=xdg-run/media
+  # Pulseaudio for video playback
+  - --socket=pulseaudio
+  # GPU acceleration (optional but useful for video preview)
+  - --device=dri
+  # Allow access to host fonts so glyph coverage matches the system
+  - --filesystem=xdg-data/fonts:ro
+  - --filesystem=~/.local/share/fonts:ro
+  - --filesystem=~/.fonts:ro
+
+cleanup-commands:
+  - mkdir -p /app/lib/ffmpeg
+
+modules:
+  # Python 3 base
+  - name: python3-pip
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} wxPython
+    sources:
+      - type: file
+        url: https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04/wxpython-4.2.4-cp313-cp313-linux_x86_64.whl
+        sha256: 1fadee8647ec8d5a18052e63d07e46f3fd7c32c1eb27299d7f6e7c9b0b5b5cda
+      - type: file
+        url: https://files.pythonhosted.org/packages/57/ca/5a9d38900d9d74785141d6580950fe705de68af735ff6e727cb911b64740/pillow-12.0.0-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: bdee52571a343d721fb2eb3b090a82d959ff37fc631e3f70422e0c2e029f3e76
+      - type: file
+        url: https://files.pythonhosted.org/packages/18/5d/3bf57dcd21979b887f014ea83c24ae194cfcd12b9e0fda66b957c69d1fca/setuptools-80.9.0.tar.gz
+        sha256: f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c
+      - type: file
+        url: https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl
+        sha256: 4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+      - type: file
+        url: https://files.pythonhosted.org/packages/b0/f0/8404db5098d92446b3e3695cf41c6f0ecb703d701cb0b7566ee2177f2eee/numpy-2.3.4-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 13b9062e4f5c7ee5c7e5be96f29ba71bc5a37fed3d1d77c37390ae00724d296d
+
+  # libjpeg-turbo (required by wxPython wheel)
+  - name: libjpeg-turbo
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DENABLE_STATIC=OFF
+      - -DENABLE_SHARED=ON
+      - -DWITH_JPEG8=ON
+    sources:
+      - type: archive
+        url: https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.0.4/libjpeg-turbo-3.0.4.tar.gz
+        sha256: 99130559e7d62e8d695f2c0eaeef912c5828d5b84a0537dcb24c9678c9d5b76b
+
+# wxWidgets for GUI
+  - name: wxwidgets
+    config-opts:
+      - --disable-sys-libs
+    sources:
+      - type: archive
+        url: https://github.com/wxWidgets/wxWidgets/releases/download/v3.3.1/wxWidgets-3.3.1.tar.bz2
+        sha256: f936c8d694f9c49a367a376f99c751467150a4ed7cbf8f4723ef19b2d2d9998d
+
+  # VidTool application
+  - name: vidtool
+    buildsystem: simple
+    build-commands:
+      # Install Python files
+      - install -D app.py ${FLATPAK_DEST}/share/vidtool/app.py
+      - install -D vidtool.py ${FLATPAK_DEST}/share/vidtool/vidtool.py
+      - install -D app_state.py ${FLATPAK_DEST}/share/vidtool/app_state.py
+      - install -D main_frame.py ${FLATPAK_DEST}/share/vidtool/main_frame.py
+      - install -D demo_all_features.py ${FLATPAK_DEST}/share/vidtool/demo_all_features.py
+      
+      # Install modules
+      - mkdir -p ${FLATPAK_DEST}/share/vidtool/modules
+      - cp -r modules/*.py ${FLATPAK_DEST}/share/vidtool/modules/
+      
+      # Install panels
+      - mkdir -p ${FLATPAK_DEST}/share/vidtool/panels
+      - cp -r panels/*.py ${FLATPAK_DEST}/share/vidtool/panels/
+      
+      # Install dialogs
+      - mkdir -p ${FLATPAK_DEST}/share/vidtool/dialogs
+      - cp -r dialogs/*.py ${FLATPAK_DEST}/share/vidtool/dialogs/
+      
+      # Install default config files
+      - install -D config.json ${FLATPAK_DEST}/share/vidtool/config.json
+      - install -D presets.json ${FLATPAK_DEST}/share/vidtool/presets.json
+      
+      # Install launcher script
+      - install -D vidtool-launcher.sh ${FLATPAK_DEST}/bin/vidtool
+      
+      # Install desktop file and icon
+      - install -Dm644 io.github.arcum42.vidtool.desktop ${FLATPAK_DEST}/share/applications/io.github.arcum42.vidtool.desktop
+      - install -Dm644 io.github.arcum42.vidtool.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/io.github.arcum42.vidtool.png
+      
+      # Install AppStream metadata
+      - install -Dm644 io.github.arcum42.vidtool.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.arcum42.vidtool.metainfo.xml
+    
+    sources:
+      - type: dir
+        path: .

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=VidTool
+GenericName=Video Processing Tool
+Comment=Batch process, reencode, and manage video files with ease
+Icon=io.github.arcum42.vidtool
+Exec=vidtool
+Terminal=false
+Categories=AudioVideo;VideoEditor;GTK;
+Keywords=video;processing;encode;reencode;ffmpeg;conversion;
+StartupNotify=true

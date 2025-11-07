@@ -2,6 +2,24 @@
 
 VidTool is a video processing tool with both a modern graphical user interface (GUI) and a command line interface (CLI). It relies on ffmpeg and ffprobe, making it easy to batch process video files, reencode, gather information, and perform common video management tasks.
 
+## Installation
+
+### Flatpak (Recommended)
+
+VidTool is available as a Flatpak with all dependencies included (wxPython, FFmpeg, codecs):
+
+```bash
+# Build and install locally
+./build-flatpak.sh install
+
+# Or create a distributable bundle
+./build-flatpak.sh bundle
+```
+
+See [README-flatpak.md](README-flatpak.md) for detailed build instructions.
+
+### Manual Installation
+
 ## Features (GUI)
 
 The GUI version (`app.py`) provides an intuitive interface for managing and processing video files. Key features include:
@@ -13,23 +31,14 @@ The GUI version (`app.py`) provides an intuitive interface for managing and proc
 - Reencode videos with customizable options (codec, suffix, extension, CRF, etc.)
 - Play videos directly from the interface
 
-### Enhanced Video Management (New!)
+### Enhanced Video Management
 - **Column Sorting**: Click any column header to sort videos by filename, codec, resolution, or size
 - **Live Filtering**: Real-time filtering with regex support - find videos instantly as you type
-- **Batch Operations**: 
-  - Rename multiple videos using regex patterns with preview
-  - Move selected videos to organized subfolders
-  - Advanced pattern matching with capture groups
-
-### Workflow Example
-1. **Filter**: Type "2023" to find all 2023 content, or use regex like `S\d+E\d+` for TV episodes
-2. **Sort**: Click column headers to organize by size, codec, resolution, etc.
-3. **Select**: Use the smart "Select All" checkbox to quickly select/deselect all visible videos
-4. **Batch Process**: Rename with patterns like `(.*)_(\d{4})_(.*)` → `\2_\1_\3` to move year to front
+- **Batch Operations**: Rename multiple videos using regex patterns or move to organized subfolders
 
 The GUI is built with wxPython. To use it, ensure you have `wxPython` installed:
 
-```
+```bash
 pip install wxPython
 ```
 
@@ -39,21 +48,25 @@ Then run:
 python app.py
 ```
 
+### Requirements
+
+VidTool does not require installation. Just make sure you have `ffmpeg` and `ffprobe` installed and available in your system path. For the GUI, you will also need `wxPython`.
+
+To install all required Python dependencies, run:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Demo & Testing
 
-To explore the new features with sample data, run the comprehensive demo:
+To explore all features with sample data:
 
 ```bash
 python demo_all_features.py
 ```
 
-This demo creates 23 diverse temporary video files and showcases:
-- Live filtering with regex examples
-- Column sorting across all data types  
-- Batch rename operations with real files
-- Moving files to organized subfolders
-
-The demo includes quick filter buttons and guided examples to help you understand the full capabilities.
+This creates 23 temporary video files and demonstrates filtering, sorting, and batch operations with guided examples.
 
 ## Command Line Tool
 
@@ -76,22 +89,11 @@ subcommands:
 
 See below for full CLI usage and options.
 
-## Installation
+## Command Line Usage
 
-VidTool does not require installation. Just make sure you have `ffmpeg` and `ffprobe` installed and available in your system path. For the GUI, you will also need `wxPython` (see above).
+The CLI tool supports various operations:
 
-To install all required Python dependencies, run:
-
-```
-pip install -r requirements.txt
-```
-
----
-
-<details>
-<summary>Command Line Usage Details</summary>
-
-```
+```text
 usage: vidtool reencode [-h] [--av-copy-only] [--x265] [--vcodec [VCODEC]] [--acodec [ACODEC]] [--strip-video] [--strip-audio] [--strip-subs] [--strip-data]
                         [--custom-flags [CUSTOM_FLAGS ...]] [--batch] [--fix-resolution] [--fix-errors] [--force | --no-clobber]
                         pattern ext suffix
@@ -137,5 +139,3 @@ options:
   -h, --help  show this help message and exit
   --batch     Batch rename all files in a directory.
 ```
-
-</details>
